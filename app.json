@@ -1,0 +1,427 @@
+{
+  "id": "browser",
+  "name": "Browser",
+  "version": "1.0.0",
+  "api": 2,
+  "icon": "icon.svg",
+  "description": "Hearthscale's own Chromium as tools: the agent sees the page as numbered interactive elements, acts on them by number in front of you, signed in as you, and hands the tab over at a login wall.",
+  "environment": {
+    "kind": "process"
+  },
+  "uses": [
+    "surface"
+  ],
+  "contributes": {
+    "asks": [
+      {
+        "kind": "handoff",
+        "title": "The page needs a human"
+      }
+    ]
+  },
+  "tools": [
+    {
+      "name": "navigate",
+      "title": "Go to a URL",
+      "description": "Navigate the session's browser tab to a URL, opening the tab first when the session has none, wait for the page to settle, and return the page state. The page loads quietly in the background; the user sees it only after the show tool.",
+      "input": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string",
+            "description": "The URL to navigate to"
+          }
+        },
+        "required": [
+          "url"
+        ]
+      },
+      "mutating": false,
+      "outbound": true,
+      "timeoutMs": 630000
+    },
+    {
+      "name": "search",
+      "title": "Web search",
+      "description": "Search the web for a query in the session's browser tab, opening the tab first when the session has none, and return the results page state. Prefer this over guessing a URL. The results load quietly in the background.",
+      "input": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "The search query"
+          },
+          "engine": {
+            "type": "string",
+            "enum": [
+              "duckduckgo",
+              "google",
+              "bing"
+            ],
+            "description": "The search engine; duckduckgo unless asked otherwise"
+          }
+        },
+        "required": [
+          "query"
+        ]
+      },
+      "mutating": false,
+      "outbound": true,
+      "timeoutMs": 630000
+    },
+    {
+      "name": "show",
+      "title": "Show the page",
+      "description": "Bring the session's browser tab in front of the user in the browser panel and return the page state. Call it only when the user asked to see the page in words like open it up, show it, pull up, or let me see. Never call it for a question the answer alone satisfies.",
+      "input": {
+        "type": "object",
+        "properties": {}
+      },
+      "mutating": false,
+      "outbound": false,
+      "timeoutMs": 630000
+    },
+    {
+      "name": "go_back",
+      "title": "Go back",
+      "description": "Go back one page in the tab's history and return the page state.",
+      "input": {
+        "type": "object",
+        "properties": {}
+      },
+      "mutating": false,
+      "outbound": true,
+      "timeoutMs": 630000
+    },
+    {
+      "name": "state",
+      "title": "Page state",
+      "description": "The page as the agent acts on it: the URL and title, the scroll position, then the visible content in order. Each interactive element is one line like [12]<a href=/pricing>Pricing</a> or [13]<input type=email placeholder=Email />; click, input, scroll, dropdown_options and select_dropdown take that number. Plain lines are visible text. Only content near the viewport is listed; scroll to see more. Indices change on every state, so act on the latest one. Every action returns a fresh state, so call this only when the page may have changed by itself. The first read of an origin the user is signed in to asks once per origin.",
+      "input": {
+        "type": "object",
+        "properties": {}
+      },
+      "mutating": false,
+      "outbound": true,
+      "timeoutMs": 630000
+    },
+    {
+      "name": "click",
+      "title": "Click",
+      "description": "Click the element with the given state index, wait for the page to settle, and return the page state.",
+      "input": {
+        "type": "object",
+        "properties": {
+          "index": {
+            "type": "number",
+            "description": "The element index from the latest state"
+          }
+        },
+        "required": [
+          "index"
+        ]
+      },
+      "mutating": true,
+      "outbound": true,
+      "timeoutMs": 630000
+    },
+    {
+      "name": "input",
+      "title": "Type text",
+      "description": "Type text into the input, textarea or editable element with the given state index and return the page state. The field is cleared first unless clear is false. Press Enter afterwards with send_keys when the form has no button.",
+      "input": {
+        "type": "object",
+        "properties": {
+          "index": {
+            "type": "number",
+            "description": "The element index from the latest state"
+          },
+          "text": {
+            "type": "string",
+            "description": "The text to type"
+          },
+          "clear": {
+            "type": "boolean",
+            "description": "Clear the field first; true unless given"
+          }
+        },
+        "required": [
+          "index",
+          "text"
+        ]
+      },
+      "mutating": true,
+      "outbound": true,
+      "timeoutMs": 630000
+    },
+    {
+      "name": "send_keys",
+      "title": "Send keys",
+      "description": "Send keyboard keys to the focused element: a key name like Enter, Escape, Tab, Backspace, ArrowDown, or a combination like Control+a or Shift+Tab; several keys separated by spaces run in order. Returns the page state.",
+      "input": {
+        "type": "object",
+        "properties": {
+          "keys": {
+            "type": "string",
+            "description": "Key names, space-separated, with modifiers joined by +: \"Enter\", \"Escape\", \"Control+a\", \"Shift+Tab\""
+          }
+        },
+        "required": [
+          "keys"
+        ]
+      },
+      "mutating": true,
+      "outbound": true,
+      "timeoutMs": 630000
+    },
+    {
+      "name": "scroll",
+      "title": "Scroll",
+      "description": "Scroll the page, or the scrollable container around the element with the given state index, by a number of screens, and return the page state.",
+      "input": {
+        "type": "object",
+        "properties": {
+          "down": {
+            "type": "boolean",
+            "description": "Scroll down; true unless given"
+          },
+          "pages": {
+            "type": "number",
+            "description": "How many screens to scroll; 1 unless given"
+          },
+          "index": {
+            "type": "number",
+            "description": "An element index from the latest state; scrolls the container around it instead of the page"
+          }
+        }
+      },
+      "mutating": false,
+      "outbound": true,
+      "timeoutMs": 630000
+    },
+    {
+      "name": "find_text",
+      "title": "Find text",
+      "description": "Scroll the page to the first visible occurrence of a text and return the page state around it.",
+      "input": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string",
+            "description": "The text to scroll to"
+          }
+        },
+        "required": [
+          "text"
+        ]
+      },
+      "mutating": false,
+      "outbound": true,
+      "timeoutMs": 630000
+    },
+    {
+      "name": "search_page",
+      "title": "Search the page",
+      "description": "Find lines of the page's full visible text that match a pattern (a regular expression, case-insensitive) and return them with their line numbers. Fast and complete; use it on long pages before scrolling.",
+      "input": {
+        "type": "object",
+        "properties": {
+          "pattern": {
+            "type": "string",
+            "description": "A regular expression, or plain text, matched case-insensitively"
+          },
+          "max": {
+            "type": "number",
+            "description": "At most this many matching lines; 30 unless given"
+          }
+        },
+        "required": [
+          "pattern"
+        ]
+      },
+      "mutating": false,
+      "outbound": true,
+      "timeoutMs": 630000
+    },
+    {
+      "name": "find_elements",
+      "title": "Find elements",
+      "description": "List the elements matching a CSS selector with their tag, text, attributes, and state index when they have one.",
+      "input": {
+        "type": "object",
+        "properties": {
+          "selector": {
+            "type": "string",
+            "description": "A CSS selector"
+          },
+          "attributes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Attribute names to report; a sensible default set unless given"
+          },
+          "max": {
+            "type": "number",
+            "description": "At most this many elements; 20 unless given"
+          }
+        },
+        "required": [
+          "selector"
+        ]
+      },
+      "mutating": false,
+      "outbound": true,
+      "timeoutMs": 630000
+    },
+    {
+      "name": "dropdown_options",
+      "title": "Dropdown options",
+      "description": "List the options of the select or custom dropdown with the given state index.",
+      "input": {
+        "type": "object",
+        "properties": {
+          "index": {
+            "type": "number",
+            "description": "The element index from the latest state"
+          }
+        },
+        "required": [
+          "index"
+        ]
+      },
+      "mutating": false,
+      "outbound": true,
+      "timeoutMs": 630000
+    },
+    {
+      "name": "select_dropdown",
+      "title": "Select an option",
+      "description": "Choose the option whose text matches in the select or custom dropdown with the given state index, then return the page state.",
+      "input": {
+        "type": "object",
+        "properties": {
+          "index": {
+            "type": "number",
+            "description": "The element index from the latest state"
+          },
+          "text": {
+            "type": "string",
+            "description": "The option text to choose"
+          }
+        },
+        "required": [
+          "index",
+          "text"
+        ]
+      },
+      "mutating": true,
+      "outbound": true,
+      "timeoutMs": 630000
+    },
+    {
+      "name": "extract",
+      "title": "Extract the page",
+      "description": "The page's main content as Markdown, with headings, links, lists and tables kept. Long pages come in chunks; the result says where to continue with start.",
+      "input": {
+        "type": "object",
+        "properties": {
+          "start": {
+            "type": "number",
+            "description": "The character offset to continue from; 0 unless given"
+          }
+        }
+      },
+      "mutating": false,
+      "outbound": true,
+      "timeoutMs": 630000
+    },
+    {
+      "name": "evaluate",
+      "title": "Evaluate JavaScript",
+      "description": "Run a JavaScript expression in the page and return its JSON-serialized result, capped for the context window.",
+      "input": {
+        "type": "object",
+        "properties": {
+          "js": {
+            "type": "string",
+            "description": "A JavaScript expression to run in the page"
+          }
+        },
+        "required": [
+          "js"
+        ]
+      },
+      "mutating": false,
+      "outbound": true,
+      "timeoutMs": 630000
+    },
+    {
+      "name": "wait",
+      "title": "Wait",
+      "description": "Wait a number of seconds (at most 30) for the page to change, then return the page state.",
+      "input": {
+        "type": "object",
+        "properties": {
+          "seconds": {
+            "type": "number",
+            "description": "How long to wait, at most 30"
+          }
+        },
+        "required": [
+          "seconds"
+        ]
+      },
+      "mutating": false,
+      "outbound": true,
+      "timeoutMs": 630000
+    },
+    {
+      "name": "screenshot",
+      "title": "Screenshot",
+      "description": "Capture the session's browser tab as an image, with every element of the last state boxed and labelled by its index.",
+      "input": {
+        "type": "object",
+        "properties": {}
+      },
+      "mutating": false,
+      "outbound": true,
+      "timeoutMs": 630000
+    },
+    {
+      "name": "close",
+      "title": "Close the tab",
+      "description": "Close the session's agent-driven browser tab.",
+      "input": {
+        "type": "object",
+        "properties": {}
+      },
+      "mutating": false,
+      "outbound": true,
+      "timeoutMs": 630000
+    }
+  ],
+  "capabilities": {
+    "tools": [
+      "navigate",
+      "search",
+      "show",
+      "go_back",
+      "state",
+      "click",
+      "input",
+      "send_keys",
+      "scroll",
+      "find_text",
+      "search_page",
+      "find_elements",
+      "dropdown_options",
+      "select_dropdown",
+      "extract",
+      "evaluate",
+      "wait",
+      "screenshot",
+      "close"
+    ]
+  }
+}
