@@ -1,10 +1,10 @@
 {
   "id": "browser",
   "name": "Browser",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "api": 3,
   "icon": "icon.svg",
-  "description": "Hearthscale's own Chromium as tools: the agent sees the page as numbered interactive elements, acts on them by number in front of you, signed in as you, and hands the tab over at a login wall.",
+  "description": "Hearthscale's own Chromium as tools: the agent sees the page as numbered interactive elements, acts on them by number in front of you, signed in as you, and hands the tab over at a sign-in page or a bot check.",
   "environment": {
     "kind": "process"
   },
@@ -16,13 +16,17 @@
       {
         "kind": "handoff",
         "title": "The page needs a human"
+      },
+      {
+        "kind": "signin",
+        "title": "The page needs you to sign in"
       }
     ]
   },
   "tools": [
     {
       "name": "navigate",
-      "title": "Go to a URL",
+      "title": "Go to a page",
       "description": "Navigate the session's browser tab to a URL, opening the tab first when the session has none, wait for the page to settle, and return the page state. The page loads quietly in the background; the user sees it only after the show tool.",
       "input": {
         "type": "object",
@@ -38,11 +42,12 @@
       },
       "mutating": false,
       "outbound": true,
-      "timeoutMs": 630000
+      "timeoutMs": 630000,
+      "icon": "globe"
     },
     {
       "name": "search",
-      "title": "Web search",
+      "title": "Search the web",
       "description": "Search the web for a query in the session's browser tab, opening the tab first when the session has none, and return the results page state. Prefer this over guessing a URL. The results load quietly in the background.",
       "input": {
         "type": "object",
@@ -54,11 +59,12 @@
           "engine": {
             "type": "string",
             "enum": [
-              "duckduckgo",
               "google",
+              "duckduckgo",
               "bing"
             ],
-            "description": "The search engine; duckduckgo unless asked otherwise"
+            "default": "google",
+            "description": "The search engine; google unless asked otherwise"
           }
         },
         "required": [
@@ -67,23 +73,25 @@
       },
       "mutating": false,
       "outbound": true,
-      "timeoutMs": 630000
+      "timeoutMs": 630000,
+      "icon": "globe"
     },
     {
       "name": "show",
       "title": "Show the page",
-      "description": "Bring the session's browser tab in front of the user in the browser panel and return the page state. Call it only when the user asked to see the page in words like open it up, show it, pull up, or let me see. Never call it for a question the answer alone satisfies.",
+      "description": "Bring the session's browser tab in front of the person in the browser panel. Call it only when the person asked to see the page in words like open it up, show it, pull up, or let me see. Never call it for a question the answer alone satisfies.",
       "input": {
         "type": "object",
         "properties": {}
       },
       "mutating": false,
       "outbound": false,
-      "timeoutMs": 630000
+      "timeoutMs": 630000,
+      "icon": "globe"
     },
     {
       "name": "go_back",
-      "title": "Go back",
+      "title": "Go back a page",
       "description": "Go back one page in the tab's history and return the page state.",
       "input": {
         "type": "object",
@@ -91,23 +99,25 @@
       },
       "mutating": false,
       "outbound": true,
-      "timeoutMs": 630000
+      "timeoutMs": 630000,
+      "icon": "globe"
     },
     {
       "name": "state",
-      "title": "Page state",
-      "description": "The page as the agent acts on it: the URL and title, the scroll position, then the visible content in order. Each interactive element is one line like [12]<a href=/pricing>Pricing</a> or [13]<input type=email placeholder=Email />; click, input, scroll, dropdown_options and select_dropdown take that number. Plain lines are visible text. Only content near the viewport is listed; scroll to see more. Indices change on every state, so act on the latest one. Every action returns a fresh state, so call this only when the page may have changed by itself. The first read of an origin the user is signed in to asks once per origin.",
+      "title": "Look at the page",
+      "description": "The page as the agent acts on it: the URL and title, the scroll position, then the visible content in order. Each interactive element is one line like [12]<a href=/pricing>Pricing</a> or [13]<input type=email placeholder=Email />; click, input, scroll, dropdown_options and select_dropdown take that number. Plain lines are visible text. Only the visible part of the page is listed, with a count of the links and controls outside it; scroll or find_text to reach them. Indices change on every state, so act on the latest one. Every action returns a fresh state, so call this only when the page may have changed by itself.",
       "input": {
         "type": "object",
         "properties": {}
       },
       "mutating": false,
       "outbound": true,
-      "timeoutMs": 630000
+      "timeoutMs": 630000,
+      "icon": "globe"
     },
     {
       "name": "click",
-      "title": "Click",
+      "title": "Click on the page",
       "description": "Click the element with the given state index, wait for the page to settle, and return the page state.",
       "input": {
         "type": "object",
@@ -123,11 +133,12 @@
       },
       "mutating": true,
       "outbound": true,
-      "timeoutMs": 630000
+      "timeoutMs": 630000,
+      "icon": "globe"
     },
     {
       "name": "input",
-      "title": "Type text",
+      "title": "Type on the page",
       "description": "Type text into the input, textarea or editable element with the given state index and return the page state. The field is cleared first unless clear is false. Press Enter afterwards with send_keys when the form has no button.",
       "input": {
         "type": "object",
@@ -152,11 +163,12 @@
       },
       "mutating": true,
       "outbound": true,
-      "timeoutMs": 630000
+      "timeoutMs": 630000,
+      "icon": "globe"
     },
     {
       "name": "send_keys",
-      "title": "Send keys",
+      "title": "Press keys on the page",
       "description": "Send keyboard keys to the focused element: a key name like Enter, Escape, Tab, Backspace, ArrowDown, or a combination like Control+a or Shift+Tab; several keys separated by spaces run in order. Returns the page state.",
       "input": {
         "type": "object",
@@ -172,11 +184,12 @@
       },
       "mutating": true,
       "outbound": true,
-      "timeoutMs": 630000
+      "timeoutMs": 630000,
+      "icon": "globe"
     },
     {
       "name": "scroll",
-      "title": "Scroll",
+      "title": "Scroll the page",
       "description": "Scroll the page, or the scrollable container around the element with the given state index, by a number of screens, and return the page state.",
       "input": {
         "type": "object",
@@ -197,12 +210,13 @@
       },
       "mutating": false,
       "outbound": true,
-      "timeoutMs": 630000
+      "timeoutMs": 630000,
+      "icon": "globe"
     },
     {
       "name": "find_text",
-      "title": "Find text",
-      "description": "Scroll the page to the first visible occurrence of a text and return the page state around it.",
+      "title": "Find text on the page",
+      "description": "Scroll the page to the first visible occurrence of a text and answer the passage around it, with the numbered links and controls near it.",
       "input": {
         "type": "object",
         "properties": {
@@ -217,7 +231,8 @@
       },
       "mutating": false,
       "outbound": true,
-      "timeoutMs": 630000
+      "timeoutMs": 630000,
+      "icon": "globe"
     },
     {
       "name": "search_page",
@@ -241,11 +256,12 @@
       },
       "mutating": false,
       "outbound": true,
-      "timeoutMs": 630000
+      "timeoutMs": 630000,
+      "icon": "globe"
     },
     {
       "name": "find_elements",
-      "title": "Find elements",
+      "title": "Find parts of the page",
       "description": "List the elements matching a CSS selector with their tag, text, attributes, and state index when they have one.",
       "input": {
         "type": "object",
@@ -272,11 +288,12 @@
       },
       "mutating": false,
       "outbound": true,
-      "timeoutMs": 630000
+      "timeoutMs": 630000,
+      "icon": "globe"
     },
     {
       "name": "dropdown_options",
-      "title": "Dropdown options",
+      "title": "Read a list's choices",
       "description": "List the options of the select or custom dropdown with the given state index.",
       "input": {
         "type": "object",
@@ -292,11 +309,12 @@
       },
       "mutating": false,
       "outbound": true,
-      "timeoutMs": 630000
+      "timeoutMs": 630000,
+      "icon": "globe"
     },
     {
       "name": "select_dropdown",
-      "title": "Select an option",
+      "title": "Choose from a list",
       "description": "Choose the option whose text matches in the select or custom dropdown with the given state index, then return the page state.",
       "input": {
         "type": "object",
@@ -317,11 +335,12 @@
       },
       "mutating": true,
       "outbound": true,
-      "timeoutMs": 630000
+      "timeoutMs": 630000,
+      "icon": "globe"
     },
     {
       "name": "extract",
-      "title": "Extract the page",
+      "title": "Read the whole page",
       "description": "The page's main content as Markdown, with headings, links, lists and tables kept. Long pages come in chunks; the result says where to continue with start.",
       "input": {
         "type": "object",
@@ -334,11 +353,12 @@
       },
       "mutating": false,
       "outbound": true,
-      "timeoutMs": 630000
+      "timeoutMs": 630000,
+      "icon": "globe"
     },
     {
       "name": "evaluate",
-      "title": "Evaluate JavaScript",
+      "title": "Run a script on the page",
       "description": "Run a JavaScript expression in the page and return its JSON-serialized result, capped for the context window.",
       "input": {
         "type": "object",
@@ -354,11 +374,12 @@
       },
       "mutating": false,
       "outbound": true,
-      "timeoutMs": 630000
+      "timeoutMs": 630000,
+      "icon": "globe"
     },
     {
       "name": "wait",
-      "title": "Wait",
+      "title": "Wait for the page",
       "description": "Wait a number of seconds (at most 30) for the page to change, then return the page state.",
       "input": {
         "type": "object",
@@ -374,11 +395,12 @@
       },
       "mutating": false,
       "outbound": true,
-      "timeoutMs": 630000
+      "timeoutMs": 630000,
+      "icon": "globe"
     },
     {
       "name": "screenshot",
-      "title": "Screenshot",
+      "title": "Take a picture of the page",
       "description": "Capture the session's browser tab as an image, with every element of the last state boxed and labelled by its index.",
       "input": {
         "type": "object",
@@ -386,11 +408,12 @@
       },
       "mutating": false,
       "outbound": true,
-      "timeoutMs": 630000
+      "timeoutMs": 630000,
+      "icon": "globe"
     },
     {
       "name": "close",
-      "title": "Close the tab",
+      "title": "Close the page",
       "description": "Close the session's agent-driven browser tab.",
       "input": {
         "type": "object",
@@ -398,7 +421,8 @@
       },
       "mutating": false,
       "outbound": true,
-      "timeoutMs": 630000
+      "timeoutMs": 630000,
+      "icon": "globe"
     }
   ],
   "capabilities": {

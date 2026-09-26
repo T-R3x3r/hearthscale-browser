@@ -7,9 +7,9 @@
  * runs them and answers with the page's address and title, so the tab and
  * the tools may sit on different machines. The page reaches the model as
  * an indexed state, and the functions under "page scripts" run inside the
- * page, reaching only `window` and `document`. A bot check is never defeated:
- * a challenge page raises the handoff, the person takes the tab, and the
- * command runs again.
+ * page, reaching only `window` and `document`. A bot check is never defeated
+ * and a password is never typed: a challenge page or a sign-in page raises
+ * the handoff, the person takes the tab, and the command runs again.
  */
 
 /** Titles that mark a page as a challenge only a human passes. */
@@ -21,29 +21,33 @@ const CHALLENGE = /just a moment|verify you are human|captcha|attention required
  *  chain of actions fits a 16k-token local model's window. */
 const STATE_CHARS = 8000;
 const EXTRACT_CHARS = 12000;
-/** How far past the viewport, in pixels, the state reaches. */
-const VIEWPORT_MARGIN = 500;
 /** The attribute the state stamps on each indexed element. */
 const INDEX_ATTR = 'data-hs-i';
+/** How far, in pixels, from a found text the links and controls near it
+ *  lie. */
+const NEAR_PX = 200;
 
 /** What a navigation answers first: the page is loaded, and the user sees
  *  nothing of it until the show tool. The model reads this right where it
  *  decides its next call, which matters more to a small model than a tool
  *  description does. */
 const QUIET_NOTE = (did) =>
-  `${did}. The page loaded in the background and the user cannot see it; call show only if they asked to see it.`;
+  `${did}. The page loaded in the background and the person cannot see it; call ${held.app.id}_show when they ask to see it.`;
 
 const SEARCH_ENGINES = {
-  duckduckgo: (q) => `https://duckduckgo.com/?q=${encodeURIComponent(q)}`,
   google: (q) => `https://www.google.com/search?q=${encodeURIComponent(q)}&udm=14`,
+  duckduckgo: (q) => `https://duckduckgo.com/?q=${encodeURIComponent(q)}`,
   bing: (q) => `https://www.bing.com/search?q=${encodeURIComponent(q)}`,
 };
 
 // ---- Page scripts ---------------------------------------------------------
 
-/** Walks the visible document near the viewport, stamps every interactive
+/** Walks the visible part of the document, stamps every interactive
  *  element with an index, and returns the state text: one line per
- *  interactive element, one line per visible text node, in order. */
+ *  interactive element, one line per visible text node, in order, with a
+ *  count of the interactive elements outside the view. With `near`, only
+ *  the elements within that many pixels of the last found text are
+ *  listed, and no text. */
 function pageState(o) {
   const w = window;
   const d = document;
@@ -74,8 +78,12 @@ function pageState(o) {
 
   const style = (el) => w.getComputedStyle(el);
   const shown = (s) => s.display !== 'none' && s.visibility !== 'hidden' && s.opacity !== '0';
-  const near = (r) =>
-    r.bottom >= -o.margin && r.top <= vh + o.margin && r.right >= 0 && r.left <= vw;
+  const near = (r) => r.bottom >= 0 && r.top <= vh && r.right >= 0 && r.left <= vw;
+  const found = o.near ? w.__hsFound : null;
+  const foundRect = found && found.isConnected ? found.getBoundingClientRect() : null;
+  const byFound = (r) =>
+    !o.near ||
+    (!!foundRect && r.bottom >= foundRect.top - o.near && r.top <= foundRect.bottom + o.near);
   const under = (node, ancestor) => {
     for (let n = node; n; n = n.parentNode || n.host) if (n === ancestor) return true;
     return false;
@@ -191,6 +199,7 @@ function pageState(o) {
   const walk = (node) => {
     if (truncated) return;
     if (node.nodeType === 3) {
+      if (o.near) return;
       const t = collapse(node.data);
       if (!t || (t.length < 2 && !/\w/.test(t))) return;
       const r = textRect(node);
@@ -213,7 +222,7 @@ function pageState(o) {
     if (r.width > 0 && r.height > 0 && interactive(el, s, r) && !covered(el, r)) {
       count += 1;
       el.setAttribute(o.attr, String(count));
-      push(lineOf(el, count));
+      if (byFound(r)) push(lineOf(el, count));
       return;
     }
     if (el.shadowRoot) for (const c of el.shadowRoot.childNodes) walk(c);
@@ -228,9 +237,25 @@ function pageState(o) {
   walk(modal || d.body || d.documentElement);
 
   const height = Math.max(d.documentElement.scrollHeight, d.body ? d.body.scrollHeight : 0);
+  const outside = [
+    ...d.querySelectorAll(
+      'a[href],button,input:not([type=hidden]),select,textarea,summary,[role=button],[role=link],[role=tab],[role=menuitem]',
+    ),
+  ].filter((el) => {
+    const r = el.getBoundingClientRect();
+    return r.width > 0 && r.height > 0 && !near(r) && shown(style(el));
+  }).length;
+  const signIn = [
+    ...d.querySelectorAll('input[type=password],input[autocomplete="current-password"]'),
+  ].some((el) => {
+    const r = el.getBoundingClientRect();
+    return r.width > 0 && r.height > 0 && shown(style(el));
+  });
   return {
     text: lines.join('\n'),
     count,
+    outside,
+    signIn,
     above: Math.round(w.scrollY),
     below: Math.max(0, Math.round(height - w.scrollY - vh)),
     truncated,
@@ -411,7 +436,9 @@ function pageScroll(o) {
   return { moved: Math.round(after - before), target: box ? `<${box.localName}>` : 'the page' };
 }
 
-/** Scrolls the first visible text node containing the text into view. */
+/** Scrolls the first visible text node containing the text into view,
+ *  keeps its element for the state of what lies near it, and answers the
+ *  passage around the text: its block's text, cut around the match. */
 function pageFindText(o) {
   const w = window;
   const d = document;
@@ -427,9 +454,20 @@ function pageFindText(o) {
     range.selectNodeContents(n);
     if (!range.getBoundingClientRect().height) continue;
     el.scrollIntoView({ block: 'center' });
-    return true;
+    w.__hsFound = el;
+    let block = el;
+    while (block.parentElement && w.getComputedStyle(block).display.startsWith('inline')) {
+      block = block.parentElement;
+    }
+    const text = String(block.innerText || '')
+      .replace(/\s+/g, ' ')
+      .trim();
+    const at = Math.max(0, text.toLowerCase().indexOf(want));
+    const from = Math.max(0, at - o.around);
+    const to = Math.min(text.length, at + want.length + o.around);
+    return `${from > 0 ? '…' : ''}${text.slice(from, to)}${to < text.length ? '…' : ''}`;
   }
-  return false;
+  return null;
 }
 
 /** Greps the page's full visible text, line by line. */
@@ -803,17 +841,37 @@ let held = null;
 /** One tab command on the session's executor surface. */
 const send = (op, args) => held.surface.command(op, args);
 
-/** A challenge only a person passes goes to them with the visible tab;
- *  on "Done" the same command runs once more. */
+/** The page a handoff was last raised for: the person answered it once,
+ *  and the page does not ask again until the tab has left it. */
+let handedOver = null;
+
+/** A page only the person gets past goes to them with the visible tab:
+ *  a bot check, or a sign-in. Answers whether they pressed Done. */
+const handOver = async (out, kind) => {
+  if (handedOver === out.url) return false;
+  handedOver = out.url;
+  await send('show', {});
+  const answer = await held.ask(
+    kind === 'signin'
+      ? {
+          kind,
+          text: `"${out.title}" at ${out.url} asks you to sign in. Take the browser tab, sign in, then press Done to continue.`,
+        }
+      : {
+          kind,
+          text: `"${out.title}" at ${out.url} looks like a check only you can pass. Take the browser tab, solve it, then press Done to continue.`,
+        },
+  );
+  return answer.allow;
+};
+
+/** A challenge page goes to the person; on "Done" the same command runs
+ *  once more. */
 const guarded = async (op, args) => {
-  let out = await send(op, args);
+  const out = await send(op, args);
+  if (out.url !== handedOver) handedOver = null;
   if (typeof out.title === 'string' && CHALLENGE.test(out.title)) {
-    await send('show', {});
-    const answer = await held.ask({
-      kind: 'handoff',
-      text: `"${out.title}" at ${out.url} looks like a check only you can pass. Take the browser tab, solve it, then press Done to continue.`,
-    });
-    if (answer.allow) out = await send(op, args);
+    if (await handOver(out, 'handoff')) return send(op, args);
   }
   return out;
 };
@@ -840,22 +898,32 @@ const landed = (out) => `${out.title ? `"${out.title}" — ` : ''}${out.url ?? '
 /** The indexed state of the session's tab. A page swapping documents
  *  under the script answers with an error once; the second pass reads
  *  the document that landed. */
+/** The words of a state's scroll line. */
+const scrollWords = (value) => {
+  const where = `${value.above ? `${value.above}px above` : 'top of page'}, ${
+    value.below ? `${value.below}px below` : 'end of page'
+  }`;
+  const outside = value.outside
+    ? `; ${value.outside} more link${value.outside === 1 ? '' : 's'} and controls outside the view`
+    : '';
+  const cut = value.truncated ? '; the state is cut at its budget, scroll for more' : '';
+  return `Scroll: ${where}${outside}${cut}`;
+};
+
+/** The indexed state of the session's tab. A page swapping documents
+ *  under the script answers with an error once; the second pass reads
+ *  the document that landed. A sign-in page goes to the person first. */
 const stateOf = async () => {
   let failure;
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
-      const { out, value } = await runScript(
-        pageState,
-        { margin: VIEWPORT_MARGIN, maxChars: STATE_CHARS },
-        { guard: true },
-      );
-      const where = `${value.above ? `${value.above}px above` : 'top of page'} · ${
-        value.below ? `${value.below}px below` : 'end of page'
-      }`;
-      const note = value.truncated ? ' · the state is cut at its budget, scroll for more' : '';
+      let { out, value } = await runScript(pageState, { maxChars: STATE_CHARS }, { guard: true });
+      if (value.signIn && (await handOver(out, 'signin'))) {
+        ({ out, value } = await runScript(pageState, { maxChars: STATE_CHARS }, { guard: true }));
+      }
       return [
         landed(out),
-        `Scroll: ${where}${note}`,
+        scrollWords(value),
         '',
         value.text || '(the page shows nothing)',
       ].join('\n');
@@ -890,14 +958,14 @@ module.exports = {
       return after(QUIET_NOTE('Navigated'), 0);
     },
     async search({ query, engine }) {
-      const to = SEARCH_ENGINES[String(engine ?? 'duckduckgo')];
+      const to = SEARCH_ENGINES[String(engine ?? 'google')];
       if (!to) throw new Error(`unknown search engine "${String(engine)}"`);
       await guarded('navigate', { url: to(String(query)) });
       return after(QUIET_NOTE(`Searched for "${String(query)}"`), 0);
     },
     async show() {
       await send('show', {});
-      return after('Shown in the browser panel.', 300);
+      return 'The tab is in front of the person now.';
     },
     async go_back() {
       await send('evaluate', { js: '(history.back(), true)' });
@@ -937,11 +1005,19 @@ module.exports = {
       return after(note, 300);
     },
     async find_text({ text }) {
-      const { value } = await runScript(pageFindText, { text: String(text) });
-      return after(
-        value ? `Scrolled to "${String(text)}".` : `"${String(text)}" is not on the page.`,
-        200,
-      );
+      const { out, value: passage } = await runScript(pageFindText, {
+        text: String(text),
+        around: 300,
+      });
+      if (passage === null) return after(`"${String(text)}" is not on the page.`, 200);
+      await sleep(200);
+      const { value } = await runScript(pageState, { maxChars: STATE_CHARS, near: NEAR_PX });
+      return [
+        `Found "${String(text)}" on ${landed(out)}:`,
+        passage,
+        '',
+        value.text ? `Near it:\n${value.text}` : 'No link or control is near it.',
+      ].join('\n');
     },
     async search_page({ pattern, max }) {
       const cap = Number(max) > 0 ? Math.min(Number(max), 200) : 30;
