@@ -4,10 +4,10 @@
  * The Browser plugin's backend: the browser-use action set over
  * Hearthscale's own Chromium. The backend never touches a page itself:
  * each tool sends tab commands to the session's executor surface, which
- * runs them and answers with the page's origin, so the tab and the tools
- * may sit on different machines. The page reaches the model as an indexed
- * state, and the functions under "page scripts" run inside the page,
- * reaching only `window` and `document`. A bot check is never defeated:
+ * runs them and answers with the page's address and title, so the tab and
+ * the tools may sit on different machines. The page reaches the model as
+ * an indexed state, and the functions under "page scripts" run inside the
+ * page, reaching only `window` and `document`. A bot check is never defeated:
  * a challenge page raises the handoff, the person takes the tab, and the
  * command runs again.
  */
@@ -837,14 +837,6 @@ const runScript = async (fn, arg, { guard = false, settle = false } = {}) => {
 
 const landed = (out) => `${out.title ? `"${out.title}" — ` : ''}${out.url ?? ''}`;
 
-/** Page content returns with the origin the surface measured. */
-const gated = (out, text) => ({
-  content: [{ kind: 'text', text }],
-  ...(out.origin && {
-    origins: [{ origin: out.origin, authenticated: out.authenticated === true }],
-  }),
-});
-
 /** The indexed state of the session's tab. A page swapping documents
  *  under the script answers with an error once; the second pass reads
  *  the document that landed. */
@@ -861,12 +853,12 @@ const stateOf = async () => {
         value.below ? `${value.below}px below` : 'end of page'
       }`;
       const note = value.truncated ? ' · the state is cut at its budget, scroll for more' : '';
-      return gated(
-        out,
-        [landed(out), `Scroll: ${where}${note}`, '', value.text || '(the page shows nothing)'].join(
-          '\n',
-        ),
-      );
+      return [
+        landed(out),
+        `Scroll: ${where}${note}`,
+        '',
+        value.text || '(the page shows nothing)',
+      ].join('\n');
     } catch (e) {
       failure = e;
       await sleep(700);
@@ -878,8 +870,7 @@ const stateOf = async () => {
 /** An action's answer: what it did, then the state it left. */
 const after = async (note, delayMs) => {
   if (delayMs) await sleep(delayMs);
-  const state = await stateOf();
-  return { ...state, content: [{ kind: 'text', text: `${note}\n\n${state.content[0].text}` }] };
+  return `${note}\n\n${await stateOf()}`;
 };
 
 const formatOptions = (value) =>
@@ -960,7 +951,7 @@ module.exports = {
             value.total > value.hits.length ? `, first ${value.hits.length}` : ''
           }:\n${value.hits.join('\n')}`
         : 'No line matches.';
-      return gated(out, `${landed(out)}\n\n${body}`);
+      return `${landed(out)}\n\n${body}`;
     },
     async find_elements({ selector, attributes, max }) {
       const cap = Number(max) > 0 ? Math.min(Number(max), 100) : 20;
@@ -981,7 +972,7 @@ module.exports = {
             value.total > lines.length ? `, first ${lines.length}` : ''
           }:\n${lines.join('\n')}`
         : 'Nothing matches.';
-      return gated(out, `${landed(out)}\n\n${body}`);
+      return `${landed(out)}\n\n${body}`;
     },
     async dropdown_options({ index }) {
       const i = parseIndex(index);
@@ -993,7 +984,7 @@ module.exports = {
         : value.kind === 'select'
           ? `[${i}] has no options.`
           : `[${i}] is closed — click it, then call dropdown_options again.`;
-      return gated(out, body);
+      return body;
     },
     async select_dropdown({ index, text }) {
       const i = parseIndex(index);
@@ -1020,11 +1011,11 @@ module.exports = {
         end < value.total
           ? `\n\n[Characters ${value.start}–${end} of ${value.total}; call extract with start=${end} for the rest.]`
           : '';
-      return gated(out, `${landed(out)}\n\n${value.markdown || '(the page has no content)'}${more}`);
+      return `${landed(out)}\n\n${value.markdown || '(the page has no content)'}${more}`;
     },
     async evaluate({ js }) {
       const out = await send('evaluate', { js: String(js) });
-      return gated(out, out.result === undefined ? '(undefined)' : String(out.result));
+      return out.result === undefined ? '(undefined)' : String(out.result);
     },
     async wait({ seconds }) {
       const s = Math.min(30, Math.max(0, Number(seconds) || 0));
@@ -1044,9 +1035,6 @@ module.exports = {
           { kind: 'asset', asset: out.asset, mediaType: 'image/png', name: 'screenshot.png' },
           { kind: 'text', text: `${boxes} element${boxes === 1 ? '' : 's'} labelled by state index.` },
         ],
-        ...(out.origin && {
-          origins: [{ origin: out.origin, authenticated: out.authenticated === true }],
-        }),
       };
     },
     async close() {
