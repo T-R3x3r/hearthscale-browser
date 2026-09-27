@@ -1,8 +1,8 @@
 {
   "id": "browser",
   "name": "Browser",
-  "version": "1.1.0",
-  "api": 3,
+  "version": "1.2.0",
+  "api": 4,
   "icon": "icon.svg",
   "description": "Hearthscale's own Chromium as tools: the agent sees the page as numbered interactive elements, acts on them by number in front of you, signed in as you, and hands the tab over at a sign-in page or a bot check.",
   "environment": {
