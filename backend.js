@@ -4,10 +4,11 @@
  * The Browser plugin's backend: the browser-use action set over
  * Hearthscale's own Chromium. The backend never touches a page itself:
  * each tool sends tab commands to the session's executor surface, which
- * runs them and answers with the page's address and title, so the tab and
- * the tools may sit on different machines. The page reaches the model as
- * an indexed state, and the functions under "page scripts" run inside the
- * page, reaching only `window` and `document`. A bot check is never defeated
+ * runs them and answers with the page's address and title and whether the
+ * tab is shown, so the tab and the tools may sit on different machines.
+ * The page reaches the model as an indexed state, and the functions under
+ * "page scripts" run inside the page, reaching only `window` and
+ * `document`. A bot check is never defeated
  * and a password is never typed: a challenge page or a sign-in page raises
  * the handoff, the person takes the tab, and the command runs again.
  */
@@ -27,10 +28,10 @@ const INDEX_ATTR = 'data-hs-i';
  *  lie. */
 const NEAR_PX = 200;
 
-/** What a navigation answers first: the page is loaded, and the user sees
- *  nothing of it until the show tool. The model reads this right where it
- *  decides its next call, which matters more to a small model than a tool
- *  description does. */
+/** What a navigation answers first while the tab is hidden: the page is
+ *  loaded, and the person sees nothing of it until the show tool. The model
+ *  reads this right where it decides its next call, which matters more to
+ *  a small model than a tool description does. */
 const QUIET_NOTE = (did) =>
   `${did}. The page loaded in the background and the person cannot see it; call ${held.app.id}_show when they ask to see it.`;
 
@@ -954,14 +955,15 @@ module.exports = {
   },
   tools: {
     async navigate({ url }) {
-      await guarded('navigate', { url: String(url) });
-      return after(QUIET_NOTE('Navigated'), 0);
+      const out = await guarded('navigate', { url: String(url) });
+      return after(out.shown ? 'Navigated.' : QUIET_NOTE('Navigated'), 0);
     },
     async search({ query, engine }) {
       const to = SEARCH_ENGINES[String(engine ?? 'google')];
       if (!to) throw new Error(`unknown search engine "${String(engine)}"`);
-      await guarded('navigate', { url: to(String(query)) });
-      return after(QUIET_NOTE(`Searched for "${String(query)}"`), 0);
+      const out = await guarded('navigate', { url: to(String(query)) });
+      const did = `Searched for "${String(query)}"`;
+      return after(out.shown ? `${did}.` : QUIET_NOTE(did), 0);
     },
     async show() {
       await send('show', {});
