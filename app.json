@@ -27,7 +27,7 @@
     {
       "name": "navigate",
       "title": "Go to a page",
-      "description": "Navigate the session's browser tab to a URL, opening the tab first when the session has none, wait for the page to settle, and return the page state. The page loads quietly in the background; the user sees it only after the show tool.",
+      "description": "Navigate the session's browser tab to a URL, wait for the page to settle, and return the page state. When the session has no tab, it opens one hidden in the background, which the person sees only after the show tool; a tab the person already sees comes to the front.",
       "input": {
         "type": "object",
         "properties": {
@@ -48,7 +48,7 @@
     {
       "name": "search",
       "title": "Search the web",
-      "description": "Search the web for a query in the session's browser tab, opening the tab first when the session has none, and return the results page state. Prefer this over guessing a URL. The results load quietly in the background.",
+      "description": "Search the web for a query in the session's browser tab and return the results page state. Prefer this over guessing a URL. When the session has no tab, the results load in a hidden tab, which the person sees only after the show tool; a tab the person already sees comes to the front.",
       "input": {
         "type": "object",
         "properties": {
