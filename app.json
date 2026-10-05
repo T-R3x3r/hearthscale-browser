@@ -12,7 +12,8 @@
     ]
   },
   "uses": [
-    "surface"
+    "surface",
+    "store"
   ],
   "asks": [
     {

@@ -820,7 +820,6 @@ function pageOverlay(o) {
 
 // ---- The backend ----------------------------------------------------------
 
-
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /** A page script call as the one expression the surface evaluates. */
@@ -922,12 +921,9 @@ const stateOf = async () => {
       if (value.signIn && (await handOver(out, 'signin'))) {
         ({ out, value } = await runScript(pageState, { maxChars: STATE_CHARS }, { guard: true }));
       }
-      return [
-        landed(out),
-        scrollWords(value),
-        '',
-        value.text || '(the page shows nothing)',
-      ].join('\n');
+      return [landed(out), scrollWords(value), '', value.text || '(the page shows nothing)'].join(
+        '\n',
+      );
     } catch (e) {
       failure = e;
       await sleep(700);
@@ -949,175 +945,199 @@ const formatOptions = (value) =>
         .join('\n')
     : null;
 
+/** What a tool answers while the person keeps the agent out. */
+const OFF =
+  "The person turned off agent control in the Browser's settings. Ask them to turn it on, or answer without the browser.";
+
+/** Whether the person lets an agent control the browser, as the
+ *  Browser's settings in the app's store keep it. */
+const allowed = async () => {
+  const settings = await held.store.get('settings');
+  return !(settings && typeof settings === 'object' && settings.agent === false);
+};
+
+const tools = {
+  async navigate({ url }) {
+    const out = await guarded('navigate', { url: String(url) });
+    return after(out.shown ? 'Navigated.' : QUIET_NOTE('Navigated'), 0);
+  },
+  async search({ query, engine }) {
+    const to = SEARCH_ENGINES[String(engine ?? 'google')];
+    if (!to) throw new Error(`unknown search engine "${String(engine)}"`);
+    const out = await guarded('navigate', { url: to(String(query)) });
+    const did = `Searched for "${String(query)}"`;
+    return after(out.shown ? `${did}.` : QUIET_NOTE(did), 0);
+  },
+  async show() {
+    await send('show', {});
+    return 'The tab is in front of the person now.';
+  },
+  async go_back() {
+    await send('evaluate', { js: '(history.back(), true)' });
+    return after('Went back.', 800);
+  },
+  state: () => stateOf(),
+  async click({ index }) {
+    const i = parseIndex(index);
+    const { value } = await runScript(pageClick, { index: i }, { settle: true });
+    if (value === 'missing') throw gone(i);
+    return after(`Clicked [${i}].`, 300);
+  },
+  async input({ index, text, clear }) {
+    const i = parseIndex(index);
+    const { value } = await runScript(pageInput, {
+      index: i,
+      text: String(text),
+      clear: clear !== false,
+    });
+    if (value === 'missing') throw gone(i);
+    if (value === 'select') throw new Error(`[${i}] is a dropdown — use select_dropdown`);
+    if (value !== 'ok') throw new Error(`[${i}] does not take text`);
+    return after(`Typed into [${i}].`, 200);
+  },
+  async send_keys({ keys }) {
+    const { value } = await runScript(pageKeys, { keys: String(keys) });
+    return after(`Sent keys: ${value || '(none)'}.`, 800);
+  },
+  async scroll({ down, pages, index }) {
+    const count = Number(pages) > 0 ? Number(pages) : 1;
+    const i = index === undefined ? 0 : parseIndex(index);
+    const { value } = await runScript(pageScroll, { down: down !== false, pages: count, index: i });
+    if (value === 'missing') throw gone(i);
+    const note = value.moved
+      ? `Scrolled ${value.target} ${Math.abs(value.moved)}px ${value.moved > 0 ? 'down' : 'up'}.`
+      : `${value.target} did not move — it is already at the ${down !== false ? 'bottom' : 'top'}.`;
+    return after(note, 300);
+  },
+  async find_text({ text }) {
+    const { out, value: passage } = await runScript(pageFindText, {
+      text: String(text),
+      around: 300,
+    });
+    if (passage === null) return after(`"${String(text)}" is not on the page.`, 200);
+    await sleep(200);
+    const { value } = await runScript(pageState, { maxChars: STATE_CHARS, near: NEAR_PX });
+    return [
+      `Found "${String(text)}" on ${landed(out)}:`,
+      passage,
+      '',
+      value.text ? `Near it:\n${value.text}` : 'No link or control is near it.',
+    ].join('\n');
+  },
+  async search_page({ pattern, max }) {
+    const cap = Number(max) > 0 ? Math.min(Number(max), 200) : 30;
+    const { out, value } = await runScript(pageSearch, { pattern: String(pattern), max: cap });
+    const body = value.total
+      ? `${value.total} matching line${value.total === 1 ? '' : 's'}${
+          value.total > value.hits.length ? `, first ${value.hits.length}` : ''
+        }:\n${value.hits.join('\n')}`
+      : 'No line matches.';
+    return `${landed(out)}\n\n${body}`;
+  },
+  async find_elements({ selector, attributes, max }) {
+    const cap = Number(max) > 0 ? Math.min(Number(max), 100) : 20;
+    const { out, value } = await runScript(pageFindElements, {
+      selector: String(selector),
+      attributes: Array.isArray(attributes) ? attributes.map(String) : [],
+      max: cap,
+    });
+    if (value === 'bad-selector') throw new Error(`"${String(selector)}" is not a valid selector`);
+    const lines = value.elements.map((el) => {
+      const attrs = Object.entries(el.attrs)
+        .map(([k, v]) => `${k}="${v}"`)
+        .join(' ');
+      return `${el.index ? `[${el.index}] ` : ''}<${el.tag}${attrs ? ` ${attrs}` : ''}>${el.text}`;
+    });
+    const body = value.total
+      ? `${value.total} element${value.total === 1 ? '' : 's'}${
+          value.total > lines.length ? `, first ${lines.length}` : ''
+        }:\n${lines.join('\n')}`
+      : 'Nothing matches.';
+    return `${landed(out)}\n\n${body}`;
+  },
+  async dropdown_options({ index }) {
+    const i = parseIndex(index);
+    const { out, value } = await runScript(pageDropdownOptions, { index: i });
+    if (value === 'missing') throw gone(i);
+    const list = formatOptions(value);
+    const body = list
+      ? `Options of [${i}]:\n${list}`
+      : value.kind === 'select'
+        ? `[${i}] has no options.`
+        : `[${i}] is closed — click it, then call dropdown_options again.`;
+    return body;
+  },
+  async select_dropdown({ index, text }) {
+    const i = parseIndex(index);
+    const arg = { index: i, text: String(text) };
+    let { value } = await runScript(pageSelectDropdown, arg);
+    if (value === 'closed') {
+      // A custom dropdown lists its options only once opened.
+      await runScript(pageClick, { index: i });
+      await sleep(400);
+      ({ value } = await runScript(pageSelectDropdown, arg));
+    }
+    if (value === 'missing') throw gone(i);
+    if (value === 'closed') throw new Error(`[${i}] shows no options after opening`);
+    if (value === 'no-option') {
+      throw new Error(`[${i}] has no option "${String(text)}" — call dropdown_options`);
+    }
+    return after(`Selected "${String(value).slice('selected:'.length)}" in [${i}].`, 200);
+  },
+  async extract({ start }) {
+    const from = Number(start) > 0 ? Math.floor(Number(start)) : 0;
+    const { out, value } = await runScript(pageExtract, { start: from, maxChars: EXTRACT_CHARS });
+    const end = value.start + value.markdown.length;
+    const more =
+      end < value.total
+        ? `\n\n[Characters ${value.start}–${end} of ${value.total}; call extract with start=${end} for the rest.]`
+        : '';
+    return `${landed(out)}\n\n${value.markdown || '(the page has no content)'}${more}`;
+  },
+  async evaluate({ js }) {
+    const out = await send('evaluate', { js: String(js) });
+    return out.result === undefined ? '(undefined)' : String(out.result);
+  },
+  async wait({ seconds }) {
+    const s = Math.min(30, Math.max(0, Number(seconds) || 0));
+    return after(`Waited ${s} s.`, s * 1000);
+  },
+  async screenshot() {
+    const { value: boxes } = await runScript(pageOverlay, { show: true });
+    let out;
+    try {
+      out = await send('screenshot', {});
+    } finally {
+      await runScript(pageOverlay, { show: false }).catch(() => {});
+    }
+    if (!out.asset) throw new Error('the surface returned no image');
+    return {
+      content: [
+        { kind: 'asset', asset: out.asset, mediaType: 'image/png', name: 'screenshot.png' },
+        {
+          kind: 'text',
+          text: `${boxes} element${boxes === 1 ? '' : 's'} labelled by state index.`,
+        },
+      ],
+    };
+  },
+  async close() {
+    await send('close', {});
+    return 'The tab is closed.';
+  },
+};
+
 module.exports = {
   activate(ctx) {
     held = ctx;
   },
-  tools: {
-    async navigate({ url }) {
-      const out = await guarded('navigate', { url: String(url) });
-      return after(out.shown ? 'Navigated.' : QUIET_NOTE('Navigated'), 0);
-    },
-    async search({ query, engine }) {
-      const to = SEARCH_ENGINES[String(engine ?? 'google')];
-      if (!to) throw new Error(`unknown search engine "${String(engine)}"`);
-      const out = await guarded('navigate', { url: to(String(query)) });
-      const did = `Searched for "${String(query)}"`;
-      return after(out.shown ? `${did}.` : QUIET_NOTE(did), 0);
-    },
-    async show() {
-      await send('show', {});
-      return 'The tab is in front of the person now.';
-    },
-    async go_back() {
-      await send('evaluate', { js: '(history.back(), true)' });
-      return after('Went back.', 800);
-    },
-    state: () => stateOf(),
-    async click({ index }) {
-      const i = parseIndex(index);
-      const { value } = await runScript(pageClick, { index: i }, { settle: true });
-      if (value === 'missing') throw gone(i);
-      return after(`Clicked [${i}].`, 300);
-    },
-    async input({ index, text, clear }) {
-      const i = parseIndex(index);
-      const { value } = await runScript(pageInput, {
-        index: i,
-        text: String(text),
-        clear: clear !== false,
-      });
-      if (value === 'missing') throw gone(i);
-      if (value === 'select') throw new Error(`[${i}] is a dropdown — use select_dropdown`);
-      if (value !== 'ok') throw new Error(`[${i}] does not take text`);
-      return after(`Typed into [${i}].`, 200);
-    },
-    async send_keys({ keys }) {
-      const { value } = await runScript(pageKeys, { keys: String(keys) });
-      return after(`Sent keys: ${value || '(none)'}.`, 800);
-    },
-    async scroll({ down, pages, index }) {
-      const count = Number(pages) > 0 ? Number(pages) : 1;
-      const i = index === undefined ? 0 : parseIndex(index);
-      const { value } = await runScript(pageScroll, { down: down !== false, pages: count, index: i });
-      if (value === 'missing') throw gone(i);
-      const note = value.moved
-        ? `Scrolled ${value.target} ${Math.abs(value.moved)}px ${value.moved > 0 ? 'down' : 'up'}.`
-        : `${value.target} did not move — it is already at the ${down !== false ? 'bottom' : 'top'}.`;
-      return after(note, 300);
-    },
-    async find_text({ text }) {
-      const { out, value: passage } = await runScript(pageFindText, {
-        text: String(text),
-        around: 300,
-      });
-      if (passage === null) return after(`"${String(text)}" is not on the page.`, 200);
-      await sleep(200);
-      const { value } = await runScript(pageState, { maxChars: STATE_CHARS, near: NEAR_PX });
-      return [
-        `Found "${String(text)}" on ${landed(out)}:`,
-        passage,
-        '',
-        value.text ? `Near it:\n${value.text}` : 'No link or control is near it.',
-      ].join('\n');
-    },
-    async search_page({ pattern, max }) {
-      const cap = Number(max) > 0 ? Math.min(Number(max), 200) : 30;
-      const { out, value } = await runScript(pageSearch, { pattern: String(pattern), max: cap });
-      const body = value.total
-        ? `${value.total} matching line${value.total === 1 ? '' : 's'}${
-            value.total > value.hits.length ? `, first ${value.hits.length}` : ''
-          }:\n${value.hits.join('\n')}`
-        : 'No line matches.';
-      return `${landed(out)}\n\n${body}`;
-    },
-    async find_elements({ selector, attributes, max }) {
-      const cap = Number(max) > 0 ? Math.min(Number(max), 100) : 20;
-      const { out, value } = await runScript(pageFindElements, {
-        selector: String(selector),
-        attributes: Array.isArray(attributes) ? attributes.map(String) : [],
-        max: cap,
-      });
-      if (value === 'bad-selector') throw new Error(`"${String(selector)}" is not a valid selector`);
-      const lines = value.elements.map((el) => {
-        const attrs = Object.entries(el.attrs)
-          .map(([k, v]) => `${k}="${v}"`)
-          .join(' ');
-        return `${el.index ? `[${el.index}] ` : ''}<${el.tag}${attrs ? ` ${attrs}` : ''}>${el.text}`;
-      });
-      const body = value.total
-        ? `${value.total} element${value.total === 1 ? '' : 's'}${
-            value.total > lines.length ? `, first ${lines.length}` : ''
-          }:\n${lines.join('\n')}`
-        : 'Nothing matches.';
-      return `${landed(out)}\n\n${body}`;
-    },
-    async dropdown_options({ index }) {
-      const i = parseIndex(index);
-      const { out, value } = await runScript(pageDropdownOptions, { index: i });
-      if (value === 'missing') throw gone(i);
-      const list = formatOptions(value);
-      const body = list
-        ? `Options of [${i}]:\n${list}`
-        : value.kind === 'select'
-          ? `[${i}] has no options.`
-          : `[${i}] is closed — click it, then call dropdown_options again.`;
-      return body;
-    },
-    async select_dropdown({ index, text }) {
-      const i = parseIndex(index);
-      const arg = { index: i, text: String(text) };
-      let { value } = await runScript(pageSelectDropdown, arg);
-      if (value === 'closed') {
-        // A custom dropdown lists its options only once opened.
-        await runScript(pageClick, { index: i });
-        await sleep(400);
-        ({ value } = await runScript(pageSelectDropdown, arg));
-      }
-      if (value === 'missing') throw gone(i);
-      if (value === 'closed') throw new Error(`[${i}] shows no options after opening`);
-      if (value === 'no-option') {
-        throw new Error(`[${i}] has no option "${String(text)}" — call dropdown_options`);
-      }
-      return after(`Selected "${String(value).slice('selected:'.length)}" in [${i}].`, 200);
-    },
-    async extract({ start }) {
-      const from = Number(start) > 0 ? Math.floor(Number(start)) : 0;
-      const { out, value } = await runScript(pageExtract, { start: from, maxChars: EXTRACT_CHARS });
-      const end = value.start + value.markdown.length;
-      const more =
-        end < value.total
-          ? `\n\n[Characters ${value.start}–${end} of ${value.total}; call extract with start=${end} for the rest.]`
-          : '';
-      return `${landed(out)}\n\n${value.markdown || '(the page has no content)'}${more}`;
-    },
-    async evaluate({ js }) {
-      const out = await send('evaluate', { js: String(js) });
-      return out.result === undefined ? '(undefined)' : String(out.result);
-    },
-    async wait({ seconds }) {
-      const s = Math.min(30, Math.max(0, Number(seconds) || 0));
-      return after(`Waited ${s} s.`, s * 1000);
-    },
-    async screenshot() {
-      const { value: boxes } = await runScript(pageOverlay, { show: true });
-      let out;
-      try {
-        out = await send('screenshot', {});
-      } finally {
-        await runScript(pageOverlay, { show: false }).catch(() => {});
-      }
-      if (!out.asset) throw new Error('the surface returned no image');
-      return {
-        content: [
-          { kind: 'asset', asset: out.asset, mediaType: 'image/png', name: 'screenshot.png' },
-          { kind: 'text', text: `${boxes} element${boxes === 1 ? '' : 's'} labelled by state index.` },
-        ],
-      };
-    },
-    async close() {
-      await send('close', {});
-      return 'The tab is closed.';
-    },
-  },
+  tools: Object.fromEntries(
+    Object.entries(tools).map(([name, tool]) => [
+      name,
+      async (...args) => {
+        if (!(await allowed())) throw new Error(OFF);
+        return tool(...args);
+      },
+    ]),
+  ),
 };
