@@ -1,28 +1,41 @@
 {
   "id": "browser",
   "name": "Browser",
-  "version": "1.2.1",
-  "api": 4,
+  "version": "2.0.0",
+  "api": 6,
   "icon": "icon.svg",
-  "description": "Hearthscale's own Chromium as tools: the agent sees the page as numbered interactive elements, acts on them by number in front of you, signed in as you, and hands the tab over at a sign-in page or a bot check.",
+  "description": "A web browser in Hearthscale's tabs, which an app's agent also drives with tools: it sees the page as numbered interactive elements, acts on them by number in front of you, signed in as you, and hands the tab over at a sign-in page or a bot check.",
   "environment": {
-    "kind": "process"
+    "kind": "process",
+    "network": [
+      "*"
+    ]
   },
   "uses": [
     "surface"
   ],
-  "contributes": {
-    "asks": [
-      {
-        "kind": "handoff",
-        "title": "The page needs a human"
-      },
-      {
-        "kind": "signin",
-        "title": "The page needs you to sign in"
-      }
-    ]
-  },
+  "asks": [
+    {
+      "kind": "handoff",
+      "title": "The page needs a human"
+    },
+    {
+      "kind": "signin",
+      "title": "The page needs you to sign in"
+    }
+  ],
+  "surfaces": [
+    {
+      "id": "browser",
+      "kind": "view",
+      "title": "Browser",
+      "entry": "views/browser.js",
+      "placements": [
+        "rail",
+        "tab"
+      ]
+    }
+  ],
   "tools": [
     {
       "name": "navigate",
@@ -79,7 +92,7 @@
     {
       "name": "show",
       "title": "Show the page",
-      "description": "Bring the session's browser tab in front of the person in the browser panel. Call it only when the person asked to see the page in words like open it up, show it, pull up, or let me see. Never call it for a question the answer alone satisfies.",
+      "description": "Bring the session's browser tab in front of the person, in a tab beside the conversation. Call it only when the person asked to see the page in words like open it up, show it, pull up, or let me see. Never call it for a question the answer alone satisfies.",
       "input": {
         "type": "object",
         "properties": {}

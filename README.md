@@ -1,9 +1,26 @@
 # Browser
 
-A plugin that browses the web for any app's agent, in the panel's browser tab, and hands a page to the person when it needs them.
+A web browser in Hearthscale's tabs, which an app's agent also drives with
+tools, and which hands a page to the person when it needs them.
 
 Browser is an ordinary Hearthscale app. Nothing in the platform knows its
 name; it installs from the Marketplace like any other app.
+
+## What it holds
+
+- `views/browser.js`: the Browser's tab. Its toolbar (back, forward,
+  reload, the address, the menu) and its find bar lie over the tab's web
+  page, which Hearthscale draws in the view's `web` slot on the Browser's
+  own partition and the view drives with `hearthscale/web/*`. Each
+  Browser tab is a tab of a tile; a link that opens a new window opens a
+  new tab beside it.
+- `backend.js`: the tools an agent drives the browser with. Each tool
+  sends tab commands to the session's tab (`surface.command`): a
+  navigation with no tab opens one out of sight, and `show` puts that
+  same tab beside the conversation. A bot check or a sign-in page goes to
+  the person with the `handoff` and `signin` cards.
+- `environment.network` is `*`: a browser may load any site, and the
+  enable card shows that as one fact.
 
 ## Working on it
 
