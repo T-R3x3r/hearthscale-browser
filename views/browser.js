@@ -74,9 +74,8 @@ html, body { height: 100%; overflow: hidden; }
 .browser-own { flex: 1; min-height: 0; }
 .browser-row-time { flex: none; width: 64px; font-size: var(--fs-sm); color: var(--dim); font-variant-numeric: tabular-nums; }
 .browser-row-host { font-size: var(--fs-sm); color: var(--mut); }
-.browser-row { cursor: pointer; gap: var(--gap-label); }
-.browser-row .hs-setting-label { min-width: 0; flex: 1; }
-.browser-row .hs-setting-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.browser-row { cursor: pointer; }
+.browser-own .hs-info-row .hs-setting-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .browser-actions { display: flex; gap: var(--gap-label); flex: none; }
 .hs-empty-view > .browser-glyph { color: var(--dim); margin-bottom: 4px; }
 .browser-notes { position: absolute; cursor: crosshair; }
@@ -924,7 +923,7 @@ function historyPage() {
       el(
         'div',
         {
-          class: 'hs-setrow hs-hovbox-ink browser-row',
+          class: 'hs-setrow hs-info-row hs-hovbox-ink browser-row',
           onclick: () => {
             setMode('web');
             navigate(h.url);
@@ -980,7 +979,7 @@ function downloadsPage() {
     card.append(
       el(
         'div',
-        { class: 'hs-setrow browser-row' },
+        { class: 'hs-setrow hs-info-row' },
         el(
           'span',
           { class: 'hs-setting-label' },
@@ -1017,7 +1016,7 @@ function passwordsPage() {
     card.append(
       el(
         'div',
-        { class: 'hs-setrow browser-row' },
+        { class: 'hs-setrow hs-info-row' },
         el(
           'span',
           { class: 'hs-setting-label' },
@@ -1171,10 +1170,12 @@ setInterval(() => {
 }, 2000);
 
 /** Shows one of the Browser's own pages, or the web page, and keeps the
- *  choice for the tab's next load. */
+ *  choice for the tab's next load. The tab takes the own page's name, or
+ *  its own back for the web page, which names it after its title. */
 function setMode(mode) {
   state.mode = mode;
   void quietly('hearthscale/ui/set-widget-state', { state: { page: mode } });
+  void quietly('hearthscale/ui/set-tab', { title: PAGES[mode] ?? null });
   update();
 }
 
@@ -1587,6 +1588,7 @@ await readSettings();
 const [history, downloads] = await Promise.all([stored('history'), stored('downloads')]);
 state.history = Array.isArray(history) ? history : [];
 state.downloads = Array.isArray(downloads) ? downloads : [];
+if (state.mode in PAGES) void quietly('hearthscale/ui/set-tab', { title: PAGES[state.mode] });
 if (state.mode === 'passwords') await readLogins();
 if (state.mode === 'settings') await readAdBlocking();
 update();
