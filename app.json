@@ -468,5 +468,11 @@
       "screenshot",
       "close"
     ]
-  }
+  },
+  "license": "MIT",
+  "categories": [
+    "research",
+    "productivity"
+  ],
+  "payment": "free"
 }
