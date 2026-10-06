@@ -21,7 +21,8 @@ name; it installs from the Marketplace like any other app.
   the person with the `handoff` and `signin` cards.
 - The view surface opens `https:` and `http:`, so Hearthscale can make
   the Browser the person's browser: a chat's links and the launcher's
-  address open in it, and its settings hold the Block ads switch.
+  address open in it, and its settings hold the Dark web pages and Block
+  ads switches.
 - Browser settings hold the agent switch: with it off, every tool refuses.
   History, Downloads, Passwords and autofill, and Browser settings each
   open in a tab of their own; the keychain of the OS keeps the passwords.

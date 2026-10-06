@@ -209,6 +209,9 @@ const state = {
   /** Whether Hearthscale blocks ads in the person's browser; null while
    *  this app is not the person's browser. */
   adBlocking: null,
+  /** Whether the person's browser draws its pages dark; null while this
+   *  app is not the person's browser. */
+  darkPages: null,
 };
 
 // ---------- The store ----------
@@ -1043,10 +1046,15 @@ function passwordsPage() {
   return parts;
 }
 
-/** Whether Hearthscale blocks ads here, in the person's browser. */
-async function readAdBlocking() {
-  const blocking = await quietly('hearthscale/web/ad-blocking');
+/** The switches Hearthscale keeps for the person's browser: ad blocking
+ *  and dark pages. */
+async function readSwitches() {
+  const [blocking, dark] = await Promise.all([
+    quietly('hearthscale/web/ad-blocking'),
+    quietly('hearthscale/web/dark-pages'),
+  ]);
   state.adBlocking = blocking?.enabled ?? null;
+  state.darkPages = dark?.enabled ?? null;
   drawOwn();
 }
 
@@ -1075,7 +1083,7 @@ function switchRow(title, on, flip) {
         'data-on': String(on),
         onclick: async () => {
           await flip();
-          await readAdBlocking();
+          await readSwitches();
         },
       },
       el('span', { class: 'hs-toggle-thumb' }),
@@ -1129,7 +1137,17 @@ function settingsPage() {
         () => void quietly('hearthscale/web/clear', { cookies: false, cache: true }),
       ),
     ),
-    // Hearthscale blocks ads only in the app that is the person's browser.
+    // Hearthscale draws pages dark and blocks ads only in the app that is
+    // the person's browser.
+    state.darkPages !== null && section('Appearance'),
+    state.darkPages !== null &&
+      el(
+        'div',
+        { class: 'hs-settings-card' },
+        switchRow('Dark web pages', state.darkPages, () =>
+          quietly('hearthscale/web/set-dark-pages', { enabled: !state.darkPages }),
+        ),
+      ),
     state.adBlocking !== null && section('Ads'),
     state.adBlocking !== null &&
       el(
@@ -1590,5 +1608,5 @@ state.history = Array.isArray(history) ? history : [];
 state.downloads = Array.isArray(downloads) ? downloads : [];
 if (state.mode in PAGES) void quietly('hearthscale/ui/set-tab', { title: PAGES[state.mode] });
 if (state.mode === 'passwords') await readLogins();
-if (state.mode === 'settings') await readAdBlocking();
+if (state.mode === 'settings') await readSwitches();
 update();
