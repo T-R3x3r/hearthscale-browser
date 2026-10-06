@@ -19,6 +19,12 @@ name; it installs from the Marketplace like any other app.
   navigation with no tab opens one out of sight, and `show` puts that
   same tab beside the conversation. A bot check or a sign-in page goes to
   the person with the `handoff` and `signin` cards.
+- The view surface opens `https:` and `http:`, so Hearthscale can make
+  the Browser the person's browser: a chat's links and the launcher's
+  address open in it, and its settings hold the Block ads switch.
+- Browser settings hold the agent switch: with it off, every tool refuses.
+  History, Downloads, Passwords and autofill, and Browser settings each
+  open in a tab of their own; the keychain of the OS keeps the passwords.
 - `environment.network` is `*`: a browser may load any site, and the
   enable card shows that as one fact.
 
