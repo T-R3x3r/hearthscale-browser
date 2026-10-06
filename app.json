@@ -3,7 +3,10 @@
   "name": "Browser",
   "version": "2.0.0",
   "api": 6,
-  "icon": "icon.svg",
+  "icon": {
+    "light": "assets/icon-light.svg",
+    "dark": "assets/icon-dark.svg"
+  },
   "description": "A web browser in Hearthscale's tabs, which an app's agent also drives with tools: it sees the page as numbered interactive elements, acts on them by number in front of you, signed in as you, and hands the tab over at a sign-in page or a bot check.",
   "environment": {
     "kind": "process",
