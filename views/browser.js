@@ -207,6 +207,9 @@ const state = {
   offer: null,
   /** The words of the last import of passwords. */
   imported: '',
+  /** Whether Hearthscale blocks ads in the person's browser; null while
+   *  this app is not the person's browser. */
+  adBlocking: null,
 };
 
 // ---------- The store ----------
@@ -1041,6 +1044,46 @@ function passwordsPage() {
   return parts;
 }
 
+/** Whether Hearthscale blocks ads here, in the person's browser. */
+async function readAdBlocking() {
+  const blocking = await quietly('hearthscale/web/ad-blocking');
+  state.adBlocking = blocking?.enabled ?? null;
+  drawOwn();
+}
+
+/** A row with a switch that the host keeps. */
+function switchRow(title, on, flip) {
+  return el(
+    'div',
+    { class: 'hs-setrow hs-toggle-row' },
+    el(
+      'span',
+      { class: 'hs-setting-label' },
+      el(
+        'span',
+        { class: 'hs-setting-label-line' },
+        el('span', { class: 'hs-setting-title' }, title),
+      ),
+    ),
+    el(
+      'button',
+      {
+        type: 'button',
+        role: 'switch',
+        class: 'hs-tog',
+        'aria-checked': String(on),
+        'aria-label': title,
+        'data-on': String(on),
+        onclick: async () => {
+          await flip();
+          await readAdBlocking();
+        },
+      },
+      el('span', { class: 'hs-toggle-thumb' }),
+    ),
+  );
+}
+
 function settingsPage() {
   return [
     el('span', { class: 'hs-settings-title' }, 'Browser settings'),
@@ -1087,6 +1130,16 @@ function settingsPage() {
         () => void quietly('hearthscale/web/clear', { cookies: false, cache: true }),
       ),
     ),
+    // Hearthscale blocks ads only in the app that is the person's browser.
+    state.adBlocking !== null && section('Ads'),
+    state.adBlocking !== null &&
+      el(
+        'div',
+        { class: 'hs-settings-card' },
+        switchRow('Block ads', state.adBlocking, () =>
+          quietly('hearthscale/web/set-ad-blocking', { enabled: !state.adBlocking }),
+        ),
+      ),
   ];
 }
 
@@ -1535,4 +1588,5 @@ const [history, downloads] = await Promise.all([stored('history'), stored('downl
 state.history = Array.isArray(history) ? history : [];
 state.downloads = Array.isArray(downloads) ? downloads : [];
 if (state.mode === 'passwords') await readLogins();
+if (state.mode === 'settings') await readAdBlocking();
 update();

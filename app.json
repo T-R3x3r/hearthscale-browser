@@ -34,6 +34,10 @@
       "placements": [
         "rail",
         "tab"
+      ],
+      "opens": [
+        "https:",
+        "http:"
       ]
     }
   ],
