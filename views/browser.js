@@ -72,17 +72,17 @@ html, body { height: 100%; overflow: hidden; }
 .browser-area > .hs-browser-page-slot { flex: none; align-self: stretch; width: 100%; }
 .browser-area[data-device='true'] > .hs-browser-page-slot { align-self: center; outline: var(--bw) solid var(--tipline); }
 .browser-own { flex: 1; min-height: 0; }
-.browser-row-time { flex: none; width: 64px; font-size: var(--fs-sm); color: var(--dim); font-variant-numeric: tabular-nums; }
+.browser-row-time { flex: none; width: calc(var(--space) * 16); font-size: var(--fs-sm); color: var(--dim); font-variant-numeric: tabular-nums; }
 .browser-row-host { font-size: var(--fs-sm); color: var(--mut); }
 .browser-row { cursor: pointer; }
 .browser-own .hs-info-row .hs-setting-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .browser-actions { display: flex; gap: var(--gap-label); flex: none; }
-.hs-empty-view > .browser-glyph { color: var(--dim); margin-bottom: 4px; }
+.hs-empty-view > .browser-glyph { color: var(--dim); margin-bottom: var(--space); }
 .browser-notes { position: absolute; cursor: crosshair; }
 .browser-mark { position: absolute; pointer-events: none; border: 2px solid var(--accent); border-radius: var(--r-sm); background: color-mix(in srgb, var(--accent) 12%, transparent); }
-.browser-pin { position: absolute; min-width: 20px; height: 20px; padding: 0 5px; border-radius: var(--r-pill); background: var(--accent); color: var(--accent-ink); font-size: var(--fs-cap); font-weight: var(--fw-strong); display: grid; place-items: center; transform: translate(-50%, -50%); pointer-events: none; }
-.browser-note { position: absolute; width: 260px; }
-.browser-note .hs-panel-field { width: 100%; height: 30px; padding: 0 9px; box-sizing: border-box; }
+.browser-pin { position: absolute; min-width: calc(var(--space) * 5); height: calc(var(--space) * 5); padding: 0 calc(var(--space) * 1.25); border-radius: var(--r-pill); background: var(--accent); color: var(--accent-ink); font-size: var(--fs-cap); font-weight: var(--fw-strong); display: grid; place-items: center; transform: translate(-50%, -50%); pointer-events: none; }
+.browser-note { position: absolute; width: calc(var(--space) * 65); }
+.browser-note .hs-panel-field { width: 100%; height: calc(var(--space) * 7.5); padding: 0 calc(var(--space) * 2.25); box-sizing: border-box; }
 `;
 
 const app = new App({ name: 'Browser', version: '2.0.0' }, {}, { autoResize: false });
@@ -583,11 +583,11 @@ function drawNotes() {
         }
       },
     });
-    const left = Math.max(PAD, Math.min(b.x, r.width - 260 - PAD));
-    const top = Math.min(b.y + b.height + OFFSET, r.height - 30 - PAD);
-    notesLayer.append(
-      el('div', { class: 'browser-note', style: { left: `${left}px`, top: `${top}px` } }, field),
-    );
+    const note = el('div', { class: 'browser-note' }, field);
+    notesLayer.append(note);
+    const size = note.getBoundingClientRect();
+    note.style.left = `${Math.max(PAD, Math.min(b.x, r.width - size.width - PAD))}px`;
+    note.style.top = `${Math.min(b.y + b.height + OFFSET, r.height - size.height - PAD)}px`;
     queueMicrotask(() => field.focus());
   }
 }
@@ -1397,8 +1397,7 @@ function drawPopups() {
         'div',
         {
           class: 'hs-menu hs-menu-surface',
-          'data-closing': 'false',
-          style: { minWidth: 'min(224px, calc(100vw - 16px))' },
+          style: { minWidth: 'min(224px, calc(100vw - var(--space) * 4))' },
         },
         rows,
       ),
