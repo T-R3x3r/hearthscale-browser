@@ -252,11 +252,26 @@ function pageState(o) {
     const r = el.getBoundingClientRect();
     return r.width > 0 && r.height > 0 && shown(style(el));
   });
+  // A bot check in view: the visible widget of reCAPTCHA, hCaptcha or
+  // Cloudflare Turnstile, which a page whose title gives no hint shows too.
+  const challenge = [...d.querySelectorAll('iframe')].some((f) => {
+    const src = f.src || '';
+    const r = f.getBoundingClientRect();
+    return (
+      /\/recaptcha\/(api2|enterprise)\/anchor|hcaptcha\.com\/captcha|challenges\.cloudflare\.com/.test(src) &&
+      !/size=invisible/.test(src) &&
+      r.width > 0 &&
+      r.height > 0 &&
+      near(r) &&
+      shown(style(f))
+    );
+  });
   return {
     text: lines.join('\n'),
     count,
     outside,
     signIn,
+    challenge,
     above: Math.round(w.scrollY),
     below: Math.max(0, Math.round(height - w.scrollY - vh)),
     truncated,
@@ -912,13 +927,15 @@ const scrollWords = (value) => {
 
 /** The indexed state of the session's tab. A page swapping documents
  *  under the script answers with an error once; the second pass reads
- *  the document that landed. A sign-in page goes to the person first. */
+ *  the document that landed. A page with a bot check or a sign-in goes to
+ *  the person first. */
 const stateOf = async () => {
   let failure;
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
       let { out, value } = await runScript(pageState, { maxChars: STATE_CHARS }, { guard: true });
-      if (value.signIn && (await handOver(out, 'signin'))) {
+      const kind = value.challenge ? 'handoff' : value.signIn ? 'signin' : null;
+      if (kind && (await handOver(out, kind))) {
         ({ out, value } = await runScript(pageState, { maxChars: STATE_CHARS }, { guard: true }));
       }
       return [landed(out), scrollWords(value), '', value.text || '(the page shows nothing)'].join(
