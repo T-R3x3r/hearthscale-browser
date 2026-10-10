@@ -309,12 +309,15 @@ function cover() {
   void quietly('hearthscale/web/cover', { covered: state.popup !== null || state.notes !== null });
 }
 
+/** Opens a popup under its anchor. The password offer opens from the
+ *  page, not from the anchor, so it is its own trigger. */
 function openPopup(kind, anchor) {
   state.popup?.release();
   state.popup = { kind, anchor, box: null, release: null };
   cover();
   update();
-  state.popup.release = safeTriangle(anchor, () => state.popup.box, closePopup);
+  const box = () => state.popup.box;
+  state.popup.release = safeTriangle(kind === 'password' ? box : () => anchor, box, closePopup);
 }
 
 function closePopup() {
@@ -1430,16 +1433,16 @@ function onWay(trigger, popup, from, p) {
  * the trigger to the popup's near edge, so a pointer that heads for any
  * part of the popup crosses no ground that closes it. This happens only
  * once the pointer has been on the trigger or on the popup, so a popup
- * that opened without the pointer waits for it. `popup` gives the popup's
- * element as drawn now. Returns the call that stops it.
+ * that opened without the pointer waits for it. `trigger` and `popup`
+ * give their elements as drawn now. Returns the call that stops it.
  */
 function safeTriangle(trigger, popup, onLeave) {
-  let armed = trigger.matches(':hover');
+  let armed = trigger().matches(':hover');
   let onTrigger = armed;
   let from = null;
   const check = (e) => {
     const p = { x: e.clientX, y: e.clientY };
-    const t = trigger.getBoundingClientRect();
+    const t = trigger().getBoundingClientRect();
     const m = popup().getBoundingClientRect();
     if (within(t, p)) {
       armed = onTrigger = true;
