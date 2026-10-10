@@ -960,12 +960,25 @@ function historyPage() {
   return parts;
 }
 
+/** A number of bytes in the unit that reads best: "16 bytes", "3.3 KB",
+ *  "2.3 MB", "1.5 GB". */
+function sizeWords(bytes) {
+  if (bytes < 1024) return `${bytes} ${bytes === 1 ? 'byte' : 'bytes'}`;
+  const units = ['KB', 'MB', 'GB', 'TB'];
+  let n = bytes / 1024;
+  let unit = 0;
+  while (n >= 1024 && unit < units.length - 1) {
+    n /= 1024;
+    unit += 1;
+  }
+  return `${n.toFixed(n < 10 ? 1 : 0)} ${units[unit]}`;
+}
+
 /** The words of a download's state, as its row shows them. */
 function downloadWords(d) {
-  const mb = (n) => `${(n / 1048576).toFixed(n < 10485760 ? 1 : 0)} MB`;
   if (d.state === 'progressing')
-    return d.total ? `${mb(d.received)} of ${mb(d.total)}` : mb(d.received);
-  if (d.state === 'completed') return d.total ? mb(d.total) : 'Done';
+    return d.total ? `${sizeWords(d.received)} of ${sizeWords(d.total)}` : sizeWords(d.received);
+  if (d.state === 'completed') return d.total ? sizeWords(d.total) : 'Done';
   if (d.state === 'cancelled') return 'Cancelled';
   return 'Failed';
 }
