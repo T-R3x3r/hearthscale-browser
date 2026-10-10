@@ -1,57 +1,20 @@
 # Browser
 
-A web browser in Hearthscale's tabs, which an app's agent also drives with
-tools, and which hands a page to the person when it needs them.
+A web browser in Hearthscale's tabs. You browse in it yourself, and an app's agent, such as Ash, uses the same browser to search the web, read pages and act on them in front of you.
 
-Browser is an ordinary Hearthscale app. Nothing in the platform knows its
-name; it installs from the Marketplace like any other app.
+## Get started
 
-## What it holds
+Click the Browser's button on the rail, or press **Ctrl+T** for a new page. Type an address, or any other words to search with Google. The **⋯** menu holds **Find in page**, **Print…**, the zoom, your passwords, downloads and history, and **Browser settings**.
 
-- `views/browser.js`: the Browser's tab. Its toolbar (back, forward,
-  reload, the address, the menu) and its find bar lie over the tab's web
-  page, which Hearthscale draws in the view's `web` slot on the Browser's
-  own partition and the view drives with `hearthscale/web/*`. Each
-  Browser tab is a tab of a tile; a link that opens a new window opens a
-  new tab beside it.
-- `backend.js`: the tools an agent drives the browser with. Each tool
-  sends tab commands to the session's tab (`surface.command`): a
-  navigation with no tab opens one out of sight, and `show` puts that
-  same tab beside the conversation. A bot check or a sign-in page goes to
-  the person with the `handoff` and `signin` cards.
-- The view surface opens `https:` and `http:`, so Hearthscale can make
-  the Browser the person's browser: a chat's links and the launcher's
-  address open in it, and its settings hold the Dark web pages and Block
-  ads switches.
-- Browser settings hold the agent switch: with it off, every tool refuses.
-  History, Downloads, Passwords and autofill, and Browser settings each
-  open in a tab of their own; the keychain of the OS keeps the passwords.
-- `environment.network` is `*`: a browser may load any site, and the
-  enable card shows that as one fact.
+To let an agent do the browsing, ask it in a conversation:
 
-## Working on it
+> Find the official documentation for this library's timeout option. Explain what it controls and include the source link.
 
-With a Hearthscale platform running on this machine:
+The agent reads pages in a tab you do not see, until you want to: **Show the page** puts that tab beside the conversation, exactly as the agent left it. A tab an agent drives shows a dot, so a page never changes without a sign.
 
-```
-hearthscale dev .
-```
+## What the Browser asks for
 
-links this folder into the running platform, picks up every change, and
-asks once in the window before any code runs.
-
-## Releasing
-
-Install the Hearthscale registry's GitHub App on this repository once. Then
-every release whose tag equals `version` in `app.json` is picked up by the
-Marketplace.
-
-```
-hearthscale pack .
-```
-
-builds the package to attach to the release.
-
-## Licence
-
-MIT. See `LICENSE`.
+- **Any website.** A browser loads whatever site you or an agent open, so the Browser may talk to any address on the network.
+- **Browsing as you.** An agent uses the sign-ins of your Browser tabs. It never types a password and never solves a check for you: when a page asks you to sign in, or shows a check only a person can pass, the Browser hands the tab to you, and the agent goes on after you press **Done**.
+- **Tools for your apps' agents.** At **Supervised**, a tool that reaches the web asks you before it runs. To keep agents out of the Browser entirely, switch off **Let the agent control the browser** in **Browser settings**.
+- **Your passwords.** A password you save goes to your operating system's keychain, never to a file, and no agent can read it.
