@@ -85,7 +85,7 @@ html, body { height: 100%; overflow: hidden; }
 .browser-note .hs-panel-field { width: 100%; height: calc(var(--space) * 7.5); padding: 0 calc(var(--space) * 2.25); box-sizing: border-box; }
 `;
 
-const app = new App({ name: 'Browser', version: '2.0.2' }, {}, { autoResize: false });
+const app = new App({ name: 'Browser', version: '2.0.3' }, {}, { autoResize: false });
 
 /** One request of the host, its result whole. */
 const call = (method, params = {}) => app.request({ method, params }, Answer);
@@ -181,7 +181,8 @@ const state = {
   editing: false,
   /** The pointer is over the address. */
   reaching: false,
-  /** The open popup: its kind and its mark. */
+  /** The open popup: its kind, its mark, its element as drawn now, and
+   *  the call that stops its watch of the pointer. */
   popup: null,
   /** The tip under the pointer: its mark and its words. */
   tip: null,
@@ -309,13 +310,16 @@ function cover() {
 }
 
 function openPopup(kind, anchor) {
-  state.popup = { kind, anchor };
+  state.popup?.release();
+  state.popup = { kind, anchor, box: null, release: null };
   cover();
   update();
+  state.popup.release = safeTriangle(anchor, () => state.popup.box, closePopup);
 }
 
 function closePopup() {
   if (state.popup === null) return;
+  state.popup.release();
   state.popup = null;
   cover();
   update();
@@ -631,18 +635,7 @@ const siteButton = el(
   },
   glyph('equalizer-fill', 15),
 );
-/** The site's popover closes once the pointer leaves both its mark and
- *  the popover. */
-const leaveSite = (e) => {
-  const to = e.relatedTarget;
-  if (to instanceof Node && (siteAnchor.contains(to) || popups.contains(to))) return;
-  if (state.popup?.kind === 'site') closePopup();
-};
-const siteAnchor = el(
-  'span',
-  { class: 'hs-browser-site-anchor', onmouseleave: leaveSite },
-  siteButton,
-);
+const siteAnchor = el('span', { class: 'hs-browser-site-anchor' }, siteButton);
 
 const input = el('input', {
   class: 'hs-in hs-urlin',
@@ -1371,6 +1364,108 @@ function deviceRows() {
   );
 }
 
+const within = (b, p) => p.x >= b.left && p.x <= b.right && p.y >= b.top && p.y <= b.bottom;
+
+/** Whether `p` lies in the triangle `a`, `b`, `c`, its edges included. */
+function inTriangle(p, a, b, c) {
+  const side = (u, v) => (p.x - v.x) * (u.y - v.y) - (u.x - v.x) * (p.y - v.y);
+  const d1 = side(a, b);
+  const d2 = side(b, c);
+  const d3 = side(c, a);
+  return !((d1 < 0 || d2 < 0 || d3 < 0) && (d1 > 0 || d2 > 0 || d3 > 0));
+}
+
+/** How far behind the point where the pointer left the trigger, away from
+ *  the popup, the triangle starts. The page reads that point a whole move
+ *  past the edge and in whole pixels, so a triangle with its tip right
+ *  there would miss the next move on the way. */
+const BEHIND = 4;
+
+/** Whether `p` lies on the way from `trigger` to `popup`: the band
+ *  straight between them, or the triangle from `from`, where the pointer
+ *  left the trigger, to the popup's edge that faces the trigger. A popup
+ *  that overlaps its trigger has no way. */
+function onWay(trigger, popup, from, p) {
+  let edge;
+  let band;
+  let tip;
+  if (popup.top >= trigger.bottom || popup.bottom <= trigger.top) {
+    const below = popup.top >= trigger.bottom;
+    const y = below ? popup.top : popup.bottom;
+    edge = [
+      { x: popup.left, y },
+      { x: popup.right, y },
+    ];
+    band = {
+      left: Math.max(trigger.left, popup.left),
+      right: Math.min(trigger.right, popup.right),
+      top: below ? trigger.bottom : popup.bottom,
+      bottom: below ? popup.top : trigger.top,
+    };
+    tip = from && { x: from.x, y: from.y + (below ? -BEHIND : BEHIND) };
+  } else if (popup.left >= trigger.right || popup.right <= trigger.left) {
+    const right = popup.left >= trigger.right;
+    const x = right ? popup.left : popup.right;
+    edge = [
+      { x, y: popup.top },
+      { x, y: popup.bottom },
+    ];
+    band = {
+      left: right ? trigger.right : popup.right,
+      right: right ? popup.left : trigger.left,
+      top: Math.max(trigger.top, popup.top),
+      bottom: Math.min(trigger.bottom, popup.bottom),
+    };
+    tip = from && { x: from.x + (right ? -BEHIND : BEHIND), y: from.y };
+  } else return false;
+  if (band.left <= band.right && band.top <= band.bottom && within(band, p)) return true;
+  return tip !== null && inTriangle(p, tip, edge[0], edge[1]);
+}
+
+/**
+ * Keeps a popup open while the pointer is on its trigger, on the popup, or
+ * on the way between them, and calls `onLeave` once the pointer is
+ * anywhere else, off the page included. The way is the band straight
+ * between the two and the triangle from the point where the pointer left
+ * the trigger to the popup's near edge, so a pointer that heads for any
+ * part of the popup crosses no ground that closes it. This happens only
+ * once the pointer has been on the trigger or on the popup, so a popup
+ * that opened without the pointer waits for it. `popup` gives the popup's
+ * element as drawn now. Returns the call that stops it.
+ */
+function safeTriangle(trigger, popup, onLeave) {
+  let armed = trigger.matches(':hover');
+  let onTrigger = armed;
+  let from = null;
+  const check = (e) => {
+    const p = { x: e.clientX, y: e.clientY };
+    const t = trigger.getBoundingClientRect();
+    const m = popup().getBoundingClientRect();
+    if (within(t, p)) {
+      armed = onTrigger = true;
+      return;
+    }
+    if (onTrigger) {
+      onTrigger = false;
+      from = p;
+    }
+    if (within(m, p)) {
+      armed = true;
+      from = null;
+    } else if (armed && !onWay(t, m, from, p)) onLeave();
+  };
+  const away = () => {
+    if (armed) onLeave();
+  };
+  const page = document.documentElement;
+  document.addEventListener('pointermove', check, true);
+  page.addEventListener('mouseleave', away);
+  return () => {
+    document.removeEventListener('pointermove', check, true);
+    page.removeEventListener('mouseleave', away);
+  };
+}
+
 /** Lays a popup under its mark, from the mark's left or right edge, kept
  *  inside the page, or above the mark where there is no room below. */
 function place(floating, anchor, align) {
@@ -1406,7 +1501,6 @@ function drawPopups() {
       {
         class: 'hs-menu-position',
         style: { visibility: 'hidden' },
-        onmouseleave: popup.kind === 'site' ? leaveSite : closePopup,
         onclick: (e) => e.stopPropagation(),
       },
       el(
@@ -1420,6 +1514,7 @@ function drawPopups() {
     );
     popups.append(floating);
     place(floating, popup.anchor, popup.kind === 'menu' ? 'right' : 'left');
+    popup.box = floating;
   }
   if (tip) {
     const floating = el(
