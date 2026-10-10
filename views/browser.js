@@ -85,7 +85,7 @@ html, body { height: 100%; overflow: hidden; }
 .browser-note .hs-panel-field { width: 100%; height: calc(var(--space) * 7.5); padding: 0 calc(var(--space) * 2.25); box-sizing: border-box; }
 `;
 
-const app = new App({ name: 'Browser', version: '2.0.0' }, {}, { autoResize: false });
+const app = new App({ name: 'Browser', version: '2.0.2' }, {}, { autoResize: false });
 
 /** One request of the host, its result whole. */
 const call = (method, params = {}) => app.request({ method, params }, Answer);
@@ -697,9 +697,12 @@ const outside = el(
   glyph('arrow-right-up-line', 13),
 );
 
+/** Whether the page's address is one the host opens in the person's own
+ *  browser: the host's `ui/open-link` opens `https:` addresses alone. */
+const openable = () => /^https:\/\//i.test(state.page.url ?? '');
+
 function openOutside() {
-  const url = state.page.url ?? '';
-  if (/^https:\/\//i.test(url)) void app.openLink({ url }).catch(() => {});
+  if (openable()) void app.openLink({ url: state.page.url }).catch(() => {});
 }
 
 // A page's address is furniture until it is reached for: it rests bare
@@ -1283,7 +1286,7 @@ function menuRows() {
       run(() => openTab({ state: { page: 'settings' } })),
     ),
     divider(),
-    paged && item('Open in your browser', run(openOutside)),
+    paged && openable() && item('Open in your browser', run(openOutside)),
     item(
       'New tab',
       run(() => openTab({})),
@@ -1466,7 +1469,7 @@ function update() {
       : hostOf(page.url ?? '');
   shown(placeholder, web && !loaded);
   shown(goMark, web && !loaded);
-  shown(outside, web && loaded && !bare);
+  shown(outside, web && loaded && !bare && openable());
   if (document.activeElement !== input) input.value = page.url ?? input.value;
   shown(findBar, web && state.finding);
   updateFindCount();
