@@ -85,7 +85,7 @@ html, body { height: 100%; overflow: hidden; }
 .browser-note .hs-panel-field { width: 100%; height: calc(var(--space) * 7.5); padding: 0 calc(var(--space) * 2.25); box-sizing: border-box; }
 `;
 
-const app = new App({ name: 'Browser', version: '2.0.3' }, {}, { autoResize: false });
+const app = new App({ name: 'Browser', version: '2.0.4' }, {}, { autoResize: false });
 
 /** One request of the host, its result whole. */
 const call = (method, params = {}) => app.request({ method, params }, Answer);
@@ -306,7 +306,7 @@ function openTab(params) {
 /** The page lies under the view while a popup or the notes lie over it. */
 function cover() {
   if (!connected) return;
-  void quietly('hearthscale/web/cover', { covered: state.popup !== null || state.notes !== null });
+  void quietly('hearthscale/ui/cover', { covered: state.popup !== null || state.notes !== null });
 }
 
 /** Opens a popup under its anchor. The password offer opens from the
