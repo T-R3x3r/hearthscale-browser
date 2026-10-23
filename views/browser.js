@@ -7,8 +7,12 @@
  * over it, and the page shows through where the view draws nothing.
  *
  * A tab may show one of the Browser's own pages in place of a web page:
- * History, Downloads or Browser settings. The settings, the history and
- * the downloads live in the app's store, which the backend reads too.
+ * History, Downloads, Passwords and autofill, or Browser settings. The
+ * settings, the history and the downloads live in the app's store, which
+ * the backend reads too; the passwords, the contact details and the
+ * folder of the downloads, the host keeps. The keys of find and of the
+ * address work in the view and, taken from the page, while the page has
+ * the keyboard.
  */
 import {
   App,
@@ -55,6 +59,27 @@ const DEVICES = [
   { name: 'Laptop', width: 1280, height: 800, scale: 1, mobile: false },
 ];
 
+/** The keys of the toolbar, as the host writes keys: find in the page,
+ *  and the address. The view takes them from its tab's page too. */
+const MAC = /Mac/.test(navigator.platform);
+const FIND_KEYS = MAC ? ['Meta+F'] : ['Control+F'];
+const ADDRESS_KEYS = MAC ? ['Meta+L', 'F6'] : ['Control+L', 'Alt+D', 'F6'];
+
+/** The contact details a form may ask for, in the order the page of
+ *  passwords and autofill shows them. */
+const CONTACT_FIELDS = [
+  ['givenName', 'First name'],
+  ['familyName', 'Last name'],
+  ['email', 'Email'],
+  ['tel', 'Phone'],
+  ['organization', 'Organization'],
+  ['street', 'Street address'],
+  ['city', 'City'],
+  ['region', 'State or region'],
+  ['postalCode', 'Postal code'],
+  ['country', 'Country'],
+];
+
 /** The Browser's own pages, by the name a tab keeps. */
 const PAGES = {
   history: 'History',
@@ -85,7 +110,7 @@ html, body { height: 100%; overflow: hidden; }
 .browser-note .hs-panel-field { width: 100%; height: calc(var(--space) * 7.5); padding: 0 calc(var(--space) * 2.25); box-sizing: border-box; }
 `;
 
-const app = new App({ name: 'Browser', version: '2.0.4' }, {}, { autoResize: false });
+const app = new App({ name: 'Browser', version: '2.1.0' }, {}, { autoResize: false });
 
 /** One request of the host, its result whole. */
 const call = (method, params = {}) => app.request({ method, params }, Answer);
@@ -207,6 +232,11 @@ const state = {
   offer: null,
   /** The words of the last import of passwords. */
   imported: '',
+  /** The person's contact details as the keychain keeps them. */
+  contact: null,
+  /** The folder the downloads go to; null for the system's downloads
+   *  folder. */
+  downloadsFolder: null,
   /** Whether Hearthscale blocks ads in the person's browser; null while
    *  this app is not the person's browser. */
   adBlocking: null,
@@ -662,16 +692,16 @@ const input = el('input', {
   },
 });
 
-const pageTitle = el('span', {
-  class: 'hs-browser-page-title',
-  onclick: () => {
-    if (state.mode !== 'web') return;
-    input.value = state.page.url ?? '';
-    state.editing = true;
-    update();
-    input.focus();
-  },
-});
+/** Opens the address for editing, with the page's whole address in it. */
+function editAddress() {
+  if (state.mode !== 'web') return;
+  input.value = state.page.url ?? '';
+  state.editing = true;
+  update();
+  input.focus();
+}
+
+const pageTitle = el('span', { class: 'hs-browser-page-title', onclick: editAddress });
 
 const placeholder = el('span', { class: 'hs-urlph' }, 'Enter a URL');
 const goMark = el('span', { class: 'hs-urlgo hs-address-go' }, glyph('arrow-right-up-line', 12));
@@ -1015,10 +1045,62 @@ function downloadsPage() {
   return parts;
 }
 
-async function readLogins() {
-  const answer = await quietly('hearthscale/web/passwords');
-  state.logins = answer?.logins ?? [];
+/** The passwords and the contact details the keychain keeps. */
+async function readAutofill() {
+  const [passwords, contact] = await Promise.all([
+    quietly('hearthscale/web/passwords'),
+    quietly('hearthscale/web/contact'),
+  ]);
+  state.logins = passwords?.logins ?? [];
+  state.contact = contact?.contact ?? null;
   drawOwn();
+}
+
+/** Keeps one contact detail as the person typed it, with the others as
+ *  the keychain keeps them. */
+async function setContact(key, value) {
+  const contact = { ...state.contact, [key]: value };
+  if (!value.trim()) delete contact[key];
+  await quietly('hearthscale/web/set-contact', {
+    contact: Object.keys(contact).length > 0 ? contact : null,
+  });
+  await readAutofill();
+}
+
+/** A row of one contact detail: a field that keeps what it holds when it
+ *  loses the focus or takes Enter; Escape puts the kept words back. */
+function contactRow(key, title) {
+  const kept = state.contact?.[key] ?? '';
+  const field = el(key === 'street' ? 'textarea' : 'input', {
+    class: key === 'street' ? 'hs-ta hs-settings-input' : 'hs-in hs-settings-input',
+    'aria-label': title,
+    rows: key === 'street' ? '2' : undefined,
+    onblur: () => {
+      if (field.value !== kept) void setContact(key, field.value);
+    },
+    onkeydown: (e) => {
+      if (e.key === 'Enter' && key !== 'street') field.blur();
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        field.value = kept;
+      }
+    },
+  });
+  field.value = kept;
+  return el(
+    'div',
+    { class: 'hs-setrow hs-info-row' },
+    el(
+      'span',
+      { class: 'hs-setting-label' },
+      el(
+        'span',
+        { class: 'hs-setting-label-line' },
+        el('span', { class: 'hs-setting-title' }, title),
+      ),
+    ),
+    el('span', { class: 'hs-setting-value' }, field),
+  );
 }
 
 function passwordsPage() {
@@ -1040,7 +1122,7 @@ function passwordsPage() {
         ),
         button('Remove', async () => {
           await quietly('hearthscale/web/password-remove', login);
-          await readLogins();
+          await readAutofill();
         }),
       ),
     );
@@ -1051,22 +1133,43 @@ function passwordsPage() {
       if (typeof answer?.count === 'number') {
         state.imported = `Imported ${answer.count} password${answer.count === 1 ? '' : 's'}`;
       }
-      await readLogins();
+      await readAutofill();
     }),
   );
   parts.push(card);
+  parts.push(section('Contact details'));
+  const details = el('div', { class: 'hs-settings-card' });
+  for (const [key, title] of CONTACT_FIELDS) details.append(contactRow(key, title));
+  if (state.contact !== null) {
+    details.append(
+      actionRow('All contact details', 'Remove', async () => {
+        await quietly('hearthscale/web/set-contact', { contact: null });
+        await readAutofill();
+      }),
+    );
+  }
+  parts.push(details);
   return parts;
 }
 
-/** The switches Hearthscale keeps for the person's browser: ad blocking
- *  and dark pages. */
+/** What Hearthscale keeps for the Browser: ad blocking and dark pages for
+ *  the person's browser, and the folder of the downloads. */
 async function readSwitches() {
-  const [blocking, dark] = await Promise.all([
+  const [blocking, dark, folder] = await Promise.all([
     quietly('hearthscale/web/ad-blocking'),
     quietly('hearthscale/web/dark-pages'),
+    quietly('hearthscale/web/downloads-folder'),
   ]);
   state.adBlocking = blocking?.enabled ?? null;
   state.darkPages = dark?.enabled ?? null;
+  state.downloadsFolder = folder?.folder ?? null;
+  drawOwn();
+}
+
+/** Picks the folder of the downloads, or goes back to the system's. */
+async function setDownloadsFolder(pick) {
+  const answer = await quietly('hearthscale/web/set-downloads-folder', { pick });
+  if (answer) state.downloadsFolder = answer.folder;
   drawOwn();
 }
 
@@ -1123,6 +1226,26 @@ function settingsPage() {
       'div',
       { class: 'hs-settings-card' },
       toggleRow('Ask where to save each file', 'askDownloads'),
+      el(
+        'div',
+        { class: 'hs-setrow hs-info-row' },
+        el(
+          'span',
+          { class: 'hs-setting-label' },
+          el(
+            'span',
+            { class: 'hs-setting-label-line' },
+            el('span', { class: 'hs-setting-title' }, state.downloadsFolder ?? 'Downloads'),
+          ),
+        ),
+        el(
+          'span',
+          { class: 'browser-actions' },
+          state.downloadsFolder !== null &&
+            button('Use Downloads', () => void setDownloadsFolder(false)),
+          button('Change', () => void setDownloadsFolder(true)),
+        ),
+      ),
       actionRow('Download history', 'Clear', async () => {
         state.downloads = [];
         await quietly('hearthscale/store/set', { key: 'downloads', value: [] });
@@ -1653,6 +1776,9 @@ app.fallbackNotificationHandler = async (note) => {
       record(params);
       update();
       return;
+    case 'hearthscale/web/key':
+      pressKey(params.key);
+      return;
     case 'hearthscale/web/password':
       if (!state.settings.passwords) return;
       state.offer = params;
@@ -1681,6 +1807,36 @@ app.fallbackNotificationHandler = async (note) => {
     }
   }
 };
+
+/** A key of the toolbar's, pressed in the view or taken from the page:
+ *  find in the page, or the address; answers whether it was one. */
+function pressKey(key) {
+  if (FIND_KEYS.includes(key)) {
+    if (state.mode === 'web' && state.loaded) openFind();
+    return true;
+  }
+  if (ADDRESS_KEYS.includes(key)) {
+    editAddress();
+    return true;
+  }
+  return false;
+}
+
+/** A key press as the host writes keys: its modifiers, then the key. */
+const keyOf = (e) =>
+  [
+    e.ctrlKey && 'Control',
+    e.shiftKey && 'Shift',
+    e.altKey && 'Alt',
+    e.metaKey && 'Meta',
+    e.code.startsWith('Key') ? e.code.slice(3) : e.code,
+  ]
+    .filter(Boolean)
+    .join('+');
+
+addEventListener('keydown', (e) => {
+  if (pressKey(keyOf(e))) e.preventDefault();
+});
 
 // Escape closes the popup, else ends the notes, before anything under it
 // hears the key.
@@ -1713,6 +1869,7 @@ update();
 
 await app.connect(new PostMessageTransport(window.parent, window.parent));
 connected = true;
+void quietly('hearthscale/web/keys', { keys: [...FIND_KEYS, ...ADDRESS_KEYS] });
 const kept = app.getHostContext()?.['hearthscale/widgetState'];
 if (kept && typeof kept === 'object' && kept.page in PAGES) state.mode = kept.page;
 await readSettings();
@@ -1720,6 +1877,6 @@ const [history, downloads] = await Promise.all([stored('history'), stored('downl
 state.history = Array.isArray(history) ? history : [];
 state.downloads = Array.isArray(downloads) ? downloads : [];
 if (state.mode in PAGES) void quietly('hearthscale/ui/set-tab', { title: PAGES[state.mode] });
-if (state.mode === 'passwords') await readLogins();
+if (state.mode === 'passwords') await readAutofill();
 if (state.mode === 'settings') await readSwitches();
 update();

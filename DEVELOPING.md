@@ -24,7 +24,15 @@ its name; it installs from the Marketplace like any other app.
   ads switches.
 - Browser settings hold the agent switch: with it off, every tool refuses.
   History, Downloads, Passwords and autofill, and Browser settings each
-  open in a tab of their own; the keychain of the OS keeps the passwords.
+  open in a tab of their own; the keychain of the OS keeps the passwords
+  and the contact details (`hearthscale/web/contact`), which Hearthscale
+  fills into a form's fields that name them, and Hearthscale keeps the
+  folder of the downloads (`hearthscale/web/set-downloads-folder`).
+- The view takes the keys of find and of the address from its page
+  (`hearthscale/web/keys`): while the page has the keyboard, they reach
+  the view as `hearthscale/web/key`. A popup a page opens with a size of
+  its own opens in a window of Hearthscale's that keeps its opener; any
+  other new window opens as a tab beside its page.
 - `environment.network` is `*`: a browser may load any site, and the
   enable card shows that as one fact.
 
