@@ -190,8 +190,9 @@ function shown(node, on) {
   node.style.display = on ? '' : 'none';
 }
 
-/** The words of a refusal. */
-const wordsOf = (e) => (e instanceof Error ? e.message : String(e));
+/** The words of a refusal, without the code of the protocol's error. */
+const wordsOf = (e) =>
+  (e instanceof Error ? e.message : String(e)).replace(/^MCP error -?\d+: /, '');
 
 // ---------- State ----------
 
@@ -1045,48 +1046,83 @@ function downloadsPage() {
   return parts;
 }
 
-/** The passwords and the contact details the keychain keeps. */
-async function readAutofill() {
-  const [passwords, contact] = await Promise.all([
-    quietly('hearthscale/web/passwords'),
-    quietly('hearthscale/web/contact'),
-  ]);
-  state.logins = passwords?.logins ?? [];
-  state.contact = contact?.contact ?? null;
+/** The passwords the keychain keeps. */
+async function readLogins() {
+  const answer = await quietly('hearthscale/web/passwords');
+  state.logins = answer?.logins ?? [];
   drawOwn();
 }
 
-/** Keeps one contact detail as the person typed it, with the others as
- *  the keychain keeps them. */
-async function setContact(key, value) {
-  const contact = { ...state.contact, [key]: value };
-  if (!value.trim()) delete contact[key];
-  await quietly('hearthscale/web/set-contact', {
-    contact: Object.keys(contact).length > 0 ? contact : null,
-  });
-  await readAutofill();
+/** The fields of the contact details. They outlive each drawing of the
+ *  page, so they keep the focus and what the person typed until Save;
+ *  Escape puts a field's kept words back. */
+const contactFields = new Map(
+  CONTACT_FIELDS.map(([key, title]) => {
+    const street = key === 'street';
+    const field = el(street ? 'textarea' : 'input', {
+      class: street ? 'hs-ta hs-settings-input' : 'hs-in hs-settings-input',
+      'aria-label': title,
+      rows: street ? '2' : undefined,
+      oninput: () => {
+        contactSave.disabled = !contactEdited();
+      },
+      onkeydown: (e) => {
+        if (e.key !== 'Escape') return;
+        e.preventDefault();
+        field.value = state.contact?.[key] ?? '';
+        contactSave.disabled = !contactEdited();
+      },
+    });
+    return [key, field];
+  }),
+);
+
+const contactSave = button('Save', () => void saveContact(), 'primary');
+contactSave.disabled = true;
+
+/** Why the last change of the contact details was not kept. */
+const contactFailure = el('span', { class: 'hs-model-error', role: 'alert' });
+
+/** Whether a field holds other words than the keychain keeps. */
+const contactEdited = () =>
+  [...contactFields].some(([key, field]) => field.value !== (state.contact?.[key] ?? ''));
+
+/** The contact details the keychain keeps, put into their fields. */
+async function readContact() {
+  const answer = await quietly('hearthscale/web/contact');
+  state.contact = answer?.contact ?? null;
+  for (const [key, field] of contactFields) field.value = state.contact?.[key] ?? '';
+  contactSave.disabled = true;
+  drawOwn();
 }
 
-/** A row of one contact detail: a field that keeps what it holds when it
- *  loses the focus or takes Enter; Escape puts the kept words back. */
+/** Keeps the contact details, or forgets them with null. A refusal or an
+ *  error of the keychain shows in words beside Save, and the fields keep
+ *  what the person typed. */
+async function keepContact(contact) {
+  contactSave.disabled = true;
+  contactFailure.textContent = '';
+  try {
+    await call('hearthscale/web/set-contact', { contact });
+  } catch (e) {
+    contactFailure.textContent = `Not saved: ${wordsOf(e)}`;
+    contactSave.disabled = !contactEdited();
+    return;
+  }
+  await readContact();
+}
+
+/** Keeps the contact details as the fields hold them. */
+function saveContact() {
+  const contact = {};
+  for (const [key, field] of contactFields) {
+    if (field.value.trim()) contact[key] = field.value;
+  }
+  return keepContact(Object.keys(contact).length > 0 ? contact : null);
+}
+
+/** A row of one contact detail and its field. */
 function contactRow(key, title) {
-  const kept = state.contact?.[key] ?? '';
-  const field = el(key === 'street' ? 'textarea' : 'input', {
-    class: key === 'street' ? 'hs-ta hs-settings-input' : 'hs-in hs-settings-input',
-    'aria-label': title,
-    rows: key === 'street' ? '2' : undefined,
-    onblur: () => {
-      if (field.value !== kept) void setContact(key, field.value);
-    },
-    onkeydown: (e) => {
-      if (e.key === 'Enter' && key !== 'street') field.blur();
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        field.value = kept;
-      }
-    },
-  });
-  field.value = kept;
   return el(
     'div',
     { class: 'hs-setrow hs-info-row' },
@@ -1099,7 +1135,7 @@ function contactRow(key, title) {
         el('span', { class: 'hs-setting-title' }, title),
       ),
     ),
-    el('span', { class: 'hs-setting-value' }, field),
+    el('span', { class: 'hs-setting-value' }, contactFields.get(key)),
   );
 }
 
@@ -1122,7 +1158,7 @@ function passwordsPage() {
         ),
         button('Remove', async () => {
           await quietly('hearthscale/web/password-remove', login);
-          await readAutofill();
+          await readLogins();
         }),
       ),
     );
@@ -1133,7 +1169,7 @@ function passwordsPage() {
       if (typeof answer?.count === 'number') {
         state.imported = `Imported ${answer.count} password${answer.count === 1 ? '' : 's'}`;
       }
-      await readAutofill();
+      await readLogins();
     }),
   );
   parts.push(card);
@@ -1141,13 +1177,11 @@ function passwordsPage() {
   const details = el('div', { class: 'hs-settings-card' });
   for (const [key, title] of CONTACT_FIELDS) details.append(contactRow(key, title));
   if (state.contact !== null) {
-    details.append(
-      actionRow('All contact details', 'Remove', async () => {
-        await quietly('hearthscale/web/set-contact', { contact: null });
-        await readAutofill();
-      }),
-    );
+    details.append(actionRow('All contact details', 'Remove', () => keepContact(null)));
   }
+  details.append(
+    el('div', { class: 'hs-setrow hs-settings-actions' }, contactSave, contactFailure),
+  );
   parts.push(details);
   return parts;
 }
@@ -1295,9 +1329,16 @@ function settingsPage() {
   ];
 }
 
+/** Draws the Browser's own page again. A field that is drawn again keeps
+ *  the focus and the caret it had. */
 function drawOwn() {
   if (state.mode === 'web') return;
   const scroll = own.scrollTop;
+  const focused = own.contains(document.activeElement) ? document.activeElement : null;
+  const caret =
+    typeof focused?.selectionStart === 'number'
+      ? [focused.selectionStart, focused.selectionEnd, focused.selectionDirection]
+      : null;
   const page =
     state.mode === 'history'
       ? historyPage()
@@ -1308,6 +1349,10 @@ function drawOwn() {
           : settingsPage();
   own.replaceChildren(el('div', { class: 'hs-settings-content' }, page));
   own.scrollTop = scroll;
+  if (focused?.isConnected) {
+    focused.focus({ preventScroll: true });
+    if (caret) focused.setSelectionRange(...caret);
+  }
 }
 
 // A page of the Browser's own reads the history and the downloads again
@@ -1822,6 +1867,29 @@ function pressKey(key) {
   return false;
 }
 
+/** The punctuation keys by the symbol a US layout prints on them. */
+const PUNCTUATION = {
+  Comma: ',',
+  Period: '.',
+  Slash: '/',
+  Backslash: '\\',
+  Semicolon: ';',
+  Quote: "'",
+  BracketLeft: '[',
+  BracketRight: ']',
+  Minus: '-',
+  Equal: '=',
+  Backquote: '`',
+};
+
+/** A physical key as the host writes it: letters and digits bare,
+ *  punctuation as its symbol, any other key by its code. */
+function keyName(code) {
+  if (code.startsWith('Key')) return code.slice(3);
+  if (code.startsWith('Digit')) return code.slice(5);
+  return PUNCTUATION[code] ?? code;
+}
+
 /** A key press as the host writes keys: its modifiers, then the key. */
 const keyOf = (e) =>
   [
@@ -1829,7 +1897,7 @@ const keyOf = (e) =>
     e.shiftKey && 'Shift',
     e.altKey && 'Alt',
     e.metaKey && 'Meta',
-    e.code.startsWith('Key') ? e.code.slice(3) : e.code,
+    keyName(e.code),
   ]
     .filter(Boolean)
     .join('+');
@@ -1877,6 +1945,6 @@ const [history, downloads] = await Promise.all([stored('history'), stored('downl
 state.history = Array.isArray(history) ? history : [];
 state.downloads = Array.isArray(downloads) ? downloads : [];
 if (state.mode in PAGES) void quietly('hearthscale/ui/set-tab', { title: PAGES[state.mode] });
-if (state.mode === 'passwords') await readAutofill();
+if (state.mode === 'passwords') await Promise.all([readLogins(), readContact()]);
 if (state.mode === 'settings') await readSwitches();
 update();
