@@ -1867,27 +1867,12 @@ function pressKey(key) {
   return false;
 }
 
-/** The punctuation keys by the symbol a US layout prints on them. */
-const PUNCTUATION = {
-  Comma: ',',
-  Period: '.',
-  Slash: '/',
-  Backslash: '\\',
-  Semicolon: ';',
-  Quote: "'",
-  BracketLeft: '[',
-  BracketRight: ']',
-  Minus: '-',
-  Equal: '=',
-  Backquote: '`',
-};
-
-/** A physical key as the host writes it: letters and digits bare,
- *  punctuation as its symbol, any other key by its code. */
+/** A physical key as the host writes it: letters and digits bare, any
+ *  other key by its code. */
 function keyName(code) {
   if (code.startsWith('Key')) return code.slice(3);
   if (code.startsWith('Digit')) return code.slice(5);
-  return PUNCTUATION[code] ?? code;
+  return code;
 }
 
 /** A key press as the host writes keys: its modifiers, then the key. */
