@@ -172,7 +172,7 @@ function glyph(name, size, extra = '', style = {}) {
 
 /** The square button of the toolbar rows. */
 function stripButton(onclick, mark) {
-  return el('span', { class: 'hs-hovbox-ink hs-tipwrap hs-inkdim hs-panel-button', onclick }, mark);
+  return el('span', { class: 'hs-hovbox-ink hs-inkdim hs-panel-button', onclick }, mark);
 }
 
 /** A button of the kit, with its words and an optional mark. */
