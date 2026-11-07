@@ -1,8 +1,8 @@
 {
   "id": "browser",
   "name": "Browser",
-  "version": "2.1.2",
-  "api": 6,
+  "version": "2.1.3",
+  "api": 7,
   "icon": {
     "light": "assets/icon-light.svg",
     "dark": "assets/icon-dark.svg"
