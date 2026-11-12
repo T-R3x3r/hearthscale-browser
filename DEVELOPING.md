@@ -16,8 +16,17 @@ its name; it installs from the Marketplace like any other app.
 - `backend.js`: the tools an agent drives the browser with. Each tool
   sends tab commands to the session's tab (`surface.command`): a
   navigation with no tab opens one out of sight, and `show` puts that
-  same tab beside the conversation. A bot check or a sign-in page goes to
-  the person with the `handoff` and `signin` cards.
+  same tab beside the conversation. Clicks, typing and keys go to the page
+  as the browser's own input (`click`, `type` and `press`), so a page sees
+  them as a person's. `search` answers the results of the engine's page as
+  a list, and as a structured result for programs. A bot check or a
+  sign-in page goes to the person with the `handoff` and `signin` cards.
+- `read_pages` needs no tab and no window: it fetches pages through the
+  backend's own network (`net.fetch`) and turns them into Markdown with the
+  converter `extract` runs inside the page, `toMarkdown`. With no styles to
+  read, it leaves out navigation, menus and footers by their elements, roles
+  and class names. A host on the computer's own network is reached only when
+  the person grants it by name.
 - The view surface opens `https:` and `http:`, so Hearthscale can make
   the Browser the person's browser: a chat's links and the launcher's
   address open in it, and its settings hold the Dark web pages and Block

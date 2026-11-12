@@ -7,7 +7,7 @@
     "light": "assets/icon-light.svg",
     "dark": "assets/icon-dark.svg"
   },
-  "description": "A web browser in Hearthscale's tabs, which an app's agent also drives with tools: it sees the page as numbered interactive elements, acts on them by number in front of you, signed in as you, and hands the tab over at a sign-in page or a bot check.",
+  "description": "A web browser in Hearthscale's tabs, which an app's agent also drives with tools: it sees the page as numbered interactive elements, acts on them by number in front of you, signed in as you, and hands the tab over at a sign-in page or a bot check. An agent can also read pages quickly without opening them.",
   "environment": {
     "kind": "process",
     "network": [
@@ -69,7 +69,7 @@
     {
       "name": "search",
       "title": "Search the web",
-      "description": "Search the web for a query in the session's browser tab and return the results page state. Prefer this over guessing a URL. When the session has no tab, the results load in a hidden tab, which the person sees only after the show tool; a tab the person already sees comes to the front.",
+      "description": "Search the web for a query in the session's browser tab and answer the results as a numbered list, each with its title, address and snippet. Prefer this over guessing a URL. When the session has no tab, the results load in a hidden tab, which the person sees only after the show tool; a tab the person already sees comes to the front.",
       "input": {
         "type": "object",
         "properties": {
@@ -92,9 +92,110 @@
           "query"
         ]
       },
+      "output": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string"
+          },
+          "results": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "title": {
+                  "type": "string"
+                },
+                "url": {
+                  "type": "string"
+                },
+                "snippet": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "title",
+                "url",
+                "snippet"
+              ]
+            }
+          }
+        },
+        "required": [
+          "query",
+          "results"
+        ]
+      },
       "mutating": false,
       "outbound": true,
       "timeoutMs": 630000,
+      "icon": "globe"
+    },
+    {
+      "name": "read_pages",
+      "title": "Read web pages",
+      "description": "Read up to 5 web pages at once as Markdown, fast and without a tab: each address is fetched directly, with no page scripts and none of the person's sign-ins, and the person sees nothing. Long pages come in parts; the result says where to continue with start. Read a page that needs scripts or a sign-in with navigate and extract.",
+      "input": {
+        "type": "object",
+        "properties": {
+          "urls": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1,
+            "maxItems": 5,
+            "description": "The addresses to read"
+          },
+          "start": {
+            "type": "number",
+            "description": "The character offset to continue each page from; 0 unless given"
+          }
+        },
+        "required": [
+          "urls"
+        ]
+      },
+      "output": {
+        "type": "object",
+        "properties": {
+          "pages": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "url": {
+                  "type": "string"
+                },
+                "title": {
+                  "type": "string"
+                },
+                "markdown": {
+                  "type": "string"
+                },
+                "start": {
+                  "type": "number"
+                },
+                "total": {
+                  "type": "number"
+                },
+                "error": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "url"
+              ]
+            }
+          }
+        },
+        "required": [
+          "pages"
+        ]
+      },
+      "mutating": false,
+      "outbound": true,
+      "timeoutMs": 60000,
       "icon": "globe"
     },
     {
@@ -450,6 +551,7 @@
     "tools": [
       "navigate",
       "search",
+      "read_pages",
       "show",
       "go_back",
       "state",

@@ -7,10 +7,14 @@
  * runs them and answers with the page's address and title and whether the
  * tab is shown, so the tab and the tools may sit on different machines.
  * The page reaches the model as an indexed state, and the functions under
- * "page scripts" run inside the page, reaching only `window` and
- * `document`. A bot check is never defeated
- * and a password is never typed: a challenge page or a sign-in page raises
- * the handoff, the person takes the tab, and the command runs again.
+ * "page scripts" run inside the page, reaching only `window`, `document`
+ * and their arguments. Clicks, typing and keys reach the page as the
+ * person's own input. A search answers the results as a list. The read
+ * tool needs no tab: it fetches pages through the backend's own network
+ * and turns them into Markdown with the converter the extract tool runs
+ * in the page. A bot check is never defeated and a password is never
+ * typed: a challenge page or a sign-in page raises the handoff, the
+ * person takes the tab, and the command runs again.
  */
 
 /** Titles that mark a page as a challenge only a human passes. */
@@ -22,6 +26,19 @@ const CHALLENGE = /just a moment|verify you are human|captcha|attention required
  *  chain of actions fits a 16k-token local model's window. */
 const STATE_CHARS = 8000;
 const EXTRACT_CHARS = 12000;
+/** What one read answers in all, shared out over its pages, each at most
+ *  what an extract answers. */
+const READ_CHARS = 20000;
+const READ_PAGES_MOST = 5;
+const READ_TIMEOUT_MS = 20000;
+/** A desktop Chrome's request headers, as the Browser's own pages send. */
+const READ_HEADERS = {
+  'user-agent':
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36',
+  accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,text/plain;q=0.8,*/*;q=0.5',
+};
+const RESULTS_MOST = 10;
+const SNIPPET_CHARS = 300;
 /** The attribute the state stamps on each indexed element. */
 const INDEX_ATTR = 'data-hs-i';
 /** How far, in pixels, from a found text the links and controls near it
@@ -278,141 +295,76 @@ function pageState(o) {
   };
 }
 
-/** Clicks the indexed element. The navigation a click may start is the
- *  surface's to wait for. */
-function pageClick(o) {
-  const el = document.querySelector(`[${o.attr}="${o.index}"]`);
-  if (!el) return 'missing';
-  el.scrollIntoView({ block: 'center' });
-  el.click();
-  return 'ok';
-}
-
-/** Types into the indexed element through the native value setter, so
- *  framework-bound fields see the change; editable regions take the text
- *  through the editing command so their editors see it too. */
-function pageInput(o) {
+/** Scrolls the indexed element to the middle of the view and answers a
+ *  point on it that no other element covers, in the CSS pixels of the
+ *  viewport, for a click there. With `field`, only an element that takes
+ *  text has one. */
+function pageTarget(o) {
   const w = window;
   const d = document;
   const el = d.querySelector(`[${o.attr}="${o.index}"]`);
   if (!el) return 'missing';
-  const tag = el.localName;
-  if (tag === 'select') return 'select';
-  el.scrollIntoView({ block: 'center' });
-  el.focus();
-  if (tag === 'input' || tag === 'textarea') {
-    if (tag === 'input' && /^(checkbox|radio|button|submit|reset|file|image)$/.test(el.type)) {
-      return 'not-editable';
+  if (o.field) {
+    const tag = el.localName;
+    if (tag === 'select') return 'select';
+    const typed =
+      tag === 'textarea' ||
+      (tag === 'input' &&
+        !/^(checkbox|radio|button|submit|reset|file|image|range|color)$/.test(el.type));
+    if (!typed && !el.isContentEditable) return 'not-editable';
+  }
+  el.scrollIntoView({ block: 'center', inline: 'center' });
+  const r = el.getBoundingClientRect();
+  if (!r.width || !r.height) return 'hidden';
+  const under = (node, ancestor) => {
+    for (let n = node; n; n = n.parentNode || n.host) if (n === ancestor) return true;
+    return false;
+  };
+  let hit = null;
+  for (const [fx, fy] of [
+    [0.5, 0.5],
+    [0.2, 0.5],
+    [0.8, 0.5],
+    [0.5, 0.2],
+    [0.5, 0.8],
+  ]) {
+    const x = Math.min(w.innerWidth - 1, Math.max(0, r.left + r.width * fx));
+    const y = Math.min(w.innerHeight - 1, Math.max(0, r.top + r.height * fy));
+    hit = d.elementFromPoint(x, y);
+    const page = hit === d.body || hit === d.documentElement;
+    if (hit && (under(hit, el) || (!page && under(el, hit)))) {
+      return { x: Math.round(x), y: Math.round(y) };
     }
-    const proto = tag === 'input' ? w.HTMLInputElement.prototype : w.HTMLTextAreaElement.prototype;
-    Object.getOwnPropertyDescriptor(proto, 'value').set.call(
-      el,
-      o.clear ? o.text : el.value + o.text,
-    );
-    el.dispatchEvent(new w.Event('input', { bubbles: true }));
-    el.dispatchEvent(new w.Event('change', { bubbles: true }));
-    return 'ok';
   }
-  if (el.isContentEditable) {
-    if (o.clear) d.execCommand('selectAll', false, null);
-    d.execCommand('insertText', false, o.text);
-    return 'ok';
-  }
-  return 'not-editable';
+  return `covered:${hit ? hit.localName : ''}`;
 }
 
-/** Dispatches key combinations to the focused element. Tab moves focus
- *  by hand, and an uncancelled Enter submits the field's form or
- *  activates the focused control, since dispatched events carry no
- *  default action of their own. */
-function pageKeys(o) {
-  const w = window;
+/** Readies the indexed field for typing once a click has reached it: the
+ *  focus in it, and either all its text selected, so typing replaces it,
+ *  or the caret at its end. */
+function pageCaret(o) {
   const d = document;
-  const CODES = {
-    Enter: 13,
-    Escape: 27,
-    Tab: 9,
-    Backspace: 8,
-    Delete: 46,
-    ArrowUp: 38,
-    ArrowDown: 40,
-    ArrowLeft: 37,
-    ArrowRight: 39,
-    Home: 36,
-    End: 35,
-    PageUp: 33,
-    PageDown: 34,
-    ' ': 32,
-  };
-  const focusable = () =>
-    [
-      ...d.querySelectorAll(
-        'a[href],button,input,select,textarea,summary,[tabindex]:not([tabindex="-1"]),[contenteditable="true"]',
-      ),
-    ].filter(
-      (e) =>
-        !e.disabled &&
-        e.getBoundingClientRect().width > 0 &&
-        w.getComputedStyle(e).visibility !== 'hidden',
-    );
-  const done = [];
-  for (const combo of String(o.keys).trim().split(/\s+/)) {
-    const parts = combo.split('+');
-    let key = parts.pop();
-    if (!key) continue;
-    const mods = new Set(parts.map((m) => m.toLowerCase()));
-    if (/^space$/i.test(key)) key = ' ';
-    const shift = mods.has('shift');
-    if (key.length === 1) key = shift ? key.toUpperCase() : key;
-    const code =
-      key === ' '
-        ? 'Space'
-        : /^[a-z]$/i.test(key)
-          ? `Key${key.toUpperCase()}`
-          : /^[0-9]$/.test(key)
-            ? `Digit${key}`
-            : key;
-    const keyCode = CODES[key] ?? key.toUpperCase().charCodeAt(0);
-    const init = {
-      key,
-      code,
-      keyCode,
-      which: keyCode,
-      bubbles: true,
-      cancelable: true,
-      ctrlKey: mods.has('control') || mods.has('ctrl'),
-      shiftKey: shift,
-      altKey: mods.has('alt'),
-      metaKey: mods.has('meta') || mods.has('cmd') || mods.has('command'),
-    };
-    const target = d.activeElement && d.activeElement !== d.body ? d.activeElement : d.body;
-    if (key === 'Tab' && !init.ctrlKey && !init.altKey && !init.metaKey) {
-      const list = focusable();
-      const i = list.indexOf(target);
-      const next = list[(i + (shift ? -1 : 1) + list.length) % list.length];
-      if (next) next.focus();
-      done.push(`${combo} → ${next ? next.localName : 'nothing'}`);
-      continue;
+  const el = d.querySelector(`[${o.attr}="${o.index}"]`);
+  if (!el) return 'missing';
+  if (!(d.activeElement === el || el.contains(d.activeElement))) el.focus();
+  if (el.isContentEditable) {
+    const range = d.createRange();
+    range.selectNodeContents(el);
+    if (!o.clear) range.collapse(false);
+    const selection = d.getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+  } else if (o.clear) {
+    el.select();
+  } else {
+    try {
+      el.setSelectionRange(el.value.length, el.value.length);
+    } catch {
+      // A field such as an email or a number has no caret to place; the
+      // caret stays where the click put it.
     }
-    const cancelled = !target.dispatchEvent(new w.KeyboardEvent('keydown', init));
-    target.dispatchEvent(new w.KeyboardEvent('keypress', init));
-    if (!cancelled && key === 'Enter') {
-      const tag = target.localName;
-      if (target.form && tag === 'input') {
-        if (target.form.requestSubmit) target.form.requestSubmit();
-        else target.form.submit();
-      } else if (tag === 'button' || tag === 'a' || target.getAttribute('role') === 'button') {
-        target.click();
-      }
-    }
-    if (!cancelled && key === ' ') {
-      const role = target.getAttribute('role');
-      if (target.localName === 'button' || role === 'button' || role === 'checkbox') target.click();
-    }
-    target.dispatchEvent(new w.KeyboardEvent('keyup', init));
-    done.push(combo);
   }
-  return done.join(', ');
+  return 'ok';
 }
 
 /** Scrolls the page, the container around an indexed element, or — on a
@@ -581,8 +533,8 @@ function pageDropdownOptions(o) {
   };
 }
 
-/** Chooses the option whose text matches, in a native select or an open
- *  ARIA listbox. */
+/** Chooses the option whose text matches: in a native select at once, in
+ *  an open ARIA listbox by answering the point of the option for a click. */
 function pageSelectDropdown(o) {
   const w = window;
   const d = document;
@@ -598,7 +550,7 @@ function pageSelectDropdown(o) {
     Object.getOwnPropertyDescriptor(w.HTMLSelectElement.prototype, 'value').set.call(el, op.value);
     el.dispatchEvent(new w.Event('input', { bubbles: true }));
     el.dispatchEvent(new w.Event('change', { bubbles: true }));
-    return `selected:${op.text.trim()}`;
+    return { selected: op.text.trim() };
   }
   const ref = el.getAttribute('aria-controls') || el.getAttribute('aria-owns');
   const root = (ref && d.getElementById(ref)) || d;
@@ -609,16 +561,24 @@ function pageSelectDropdown(o) {
   const op = pick(options, (x) => String(x.innerText || '').trim());
   if (!op) return 'no-option';
   op.scrollIntoView({ block: 'center' });
-  op.click();
-  return `selected:${String(op.innerText || '')
-    .trim()
-    .slice(0, 80)}`;
+  const r = op.getBoundingClientRect();
+  return {
+    selected: String(op.innerText || '')
+      .trim()
+      .slice(0, 80),
+    x: Math.round(r.left + r.width / 2),
+    y: Math.round(r.top + r.height / 2),
+  };
 }
 
-/** The main content as Markdown, sliced from `start` to fit the surface. */
-function pageExtract(o) {
-  const w = window;
-  const d = document;
+/** The Markdown of an element's content, with headings, links, lists and
+ *  tables kept. It reads what a page's elements and a parsed document's
+ *  both hold (`nodeType`, `localName`, `data`, `getAttribute`), and `env`
+ *  answers the rest: `kind(el)`, one of `hidden`, `block`, `cell` and
+ *  `inline`; `children(el)`, the nodes to read in order; and `link(el)`,
+ *  a link's full address. It also runs inside the page, so it reaches
+ *  nothing but its arguments. */
+function toMarkdown(root, env) {
   const SKIP = new Set([
     'script',
     'style',
@@ -635,26 +595,40 @@ function pageExtract(o) {
     'video',
     'audio',
   ]);
-  const BLOCK = /^(block|flex|grid|list-item|table|table-row|flow-root)$/;
   const inline = (t) => t.replace(/\s+/g, ' ');
-  let out = '';
-  const emit = (t) => {
-    out += t;
+  const elements = (el) => [...env.children(el)].filter((n) => n.nodeType === 1);
+  const rowsOf = (table) =>
+    elements(table).flatMap((c) =>
+      c.localName === 'tr'
+        ? [c]
+        : /^(thead|tbody|tfoot)$/.test(c.localName)
+          ? elements(c).filter((r) => r.localName === 'tr')
+          : [],
+    );
+  const cellsOf = (tr) => elements(tr).filter((c) => c.localName === 'td' || c.localName === 'th');
+  const holdsTable = (el) => elements(el).some((c) => c.localName === 'table' || holdsTable(c));
+  // Spaces collapse across elements as a browser draws them: a text's
+  // leading space goes after a space or a line break.
+  const spaced = (out) => {
+    for (let k = out.length - 1; k >= 0; k -= 1) {
+      if (out[k]) return /\s$/.test(out[k]);
+    }
+    return true;
   };
-  const conv = (node, ctx) => {
+  const conv = (node, ctx, out) => {
     if (node.nodeType === 3) {
-      emit(ctx.pre ? node.data : inline(node.data));
+      const text = ctx.pre ? node.data : inline(node.data);
+      out.push(!ctx.pre && text[0] === ' ' && spaced(out) ? text.slice(1) : text);
       return;
     }
     if (node.nodeType !== 1) return;
     const el = node;
     const tag = el.localName;
     if (SKIP.has(tag) || el.getAttribute('aria-hidden') === 'true') return;
-    const s = w.getComputedStyle(el);
-    if (s.display === 'none' || s.visibility === 'hidden') return;
+    const kind = env.kind(el);
+    if (kind === 'hidden') return;
     const kids = (c = ctx) => {
-      if (el.shadowRoot) for (const n of el.shadowRoot.childNodes) conv(n, c);
-      for (const n of el.childNodes) conv(n, c);
+      for (const n of env.children(el)) conv(n, c, out);
     };
     switch (tag) {
       case 'h1':
@@ -663,130 +637,235 @@ function pageExtract(o) {
       case 'h4':
       case 'h5':
       case 'h6':
-        emit(`\n\n${'#'.repeat(Number(tag[1]))} `);
+        out.push(`\n\n${'#'.repeat(Number(tag[1]))} `);
         kids();
-        emit('\n\n');
+        out.push('\n\n');
         return;
       case 'br':
-        emit('\n');
+        out.push('\n');
         return;
       case 'hr':
-        emit('\n\n---\n\n');
+        out.push('\n\n---\n\n');
         return;
       case 'ul':
       case 'ol': {
-        emit('\n');
+        out.push('\n');
         let n = 0;
-        for (const c of el.children) {
+        for (const c of elements(el)) {
           if (c.localName !== 'li') {
-            conv(c, ctx);
+            conv(c, ctx, out);
             continue;
           }
           n += 1;
-          emit(`\n${'  '.repeat(ctx.depth)}${tag === 'ol' ? `${n}. ` : '- '}`);
+          out.push(`\n${'  '.repeat(ctx.depth)}${tag === 'ol' ? `${n}. ` : '- '}`);
           const sub = { ...ctx, depth: ctx.depth + 1 };
-          for (const cc of c.childNodes) conv(cc, sub);
+          for (const cc of env.children(c)) conv(cc, sub, out);
         }
-        emit('\n');
+        out.push('\n');
         return;
       }
       case 'li':
-        emit('\n- ');
+        out.push('\n- ');
         kids();
         return;
       case 'a': {
-        const href = el.getAttribute('href');
-        if (!href || /^(javascript:|#)/.test(href)) {
+        const raw = el.getAttribute('href');
+        const href = raw && !/^(javascript:|#)/i.test(raw) ? env.link(el) : null;
+        if (!href) {
           kids();
           return;
         }
-        emit('[');
-        kids();
-        emit(`](${el.href})`);
+        // A link around blocks, such as a teaser, keeps its blocks and
+        // gives its address on a line of its own.
+        const inner = [];
+        for (const n of env.children(el)) conv(n, ctx, inner);
+        const text = inner.join('').trim();
+        const heading = /^(#+ )(.*)$/.exec(text);
+        out.push(
+          text.includes('\n')
+            ? `\n${text}\n${href}\n`
+            : heading
+              ? `\n\n${heading[1]}[${heading[2]}](${href})\n\n`
+              : `[${text}](${href})`,
+        );
         return;
       }
       case 'img': {
         const alt = inline(el.getAttribute('alt') || '').trim();
-        if (alt) emit(`[image: ${alt}]`);
+        if (alt) out.push(`[image: ${alt}]`);
         return;
       }
       case 'strong':
       case 'b':
-        emit('**');
+        out.push('**');
         kids();
-        emit('**');
+        out.push('**');
         return;
       case 'em':
       case 'i':
-        emit('*');
+        out.push('*');
         kids();
-        emit('*');
+        out.push('*');
         return;
       case 'code':
         if (ctx.pre) {
           kids();
           return;
         }
-        emit('`');
+        out.push('`');
         kids();
-        emit('`');
+        out.push('`');
         return;
       case 'pre':
-        emit('\n\n```\n');
+        out.push('\n\n```\n');
         kids({ ...ctx, pre: true });
-        emit('\n```\n\n');
+        out.push('\n```\n\n');
         return;
       case 'blockquote':
-        emit('\n\n> ');
+        out.push('\n\n> ');
         kids();
-        emit('\n\n');
+        out.push('\n\n');
         return;
       case 'table': {
         // A grid of equal rows is data; anything else is layout and its
         // cells read as ordinary blocks.
-        const rows = [...el.querySelectorAll('tr')].filter((tr) => tr.closest('table') === el);
-        const widths = new Set(rows.map((tr) => tr.children.length));
-        const grid =
-          rows.length > 1 && widths.size === 1 && !widths.has(1) && !el.querySelector('table');
+        const rows = rowsOf(el);
+        const widths = new Set(rows.map((tr) => cellsOf(tr).length));
+        const grid = rows.length > 1 && widths.size === 1 && !widths.has(1) && !holdsTable(el);
         if (!grid) {
-          emit('\n');
+          out.push('\n');
           kids();
-          emit('\n');
+          out.push('\n');
           return;
         }
-        emit('\n\n');
+        out.push('\n\n');
         rows.forEach((tr, i) => {
-          const cells = [...tr.children].map((c) =>
-            inline(c.innerText || '')
-              .trim()
-              .replace(/\|/g, '\\|'),
-          );
-          emit(`| ${cells.join(' | ')} |\n`);
-          if (i === 0) emit(`|${cells.map(() => ' --- |').join('')}\n`);
+          const cells = cellsOf(tr).map((c) => {
+            const part = [];
+            for (const n of env.children(c)) conv(n, ctx, part);
+            return inline(part.join('')).trim().replace(/\|/g, '\\|');
+          });
+          out.push(`| ${cells.join(' | ')} |\n`);
+          if (i === 0) out.push(`|${cells.map(() => ' --- |').join('')}\n`);
         });
-        emit('\n');
+        out.push('\n');
         return;
       }
       default:
-        if (s.display === 'table-cell') {
+        if (kind === 'cell') {
           kids();
-          emit(' ');
-        } else if (BLOCK.test(s.display)) {
-          emit('\n');
+          out.push(' ');
+        } else if (kind === 'block') {
+          out.push('\n');
           kids();
-          emit('\n');
+          out.push('\n');
         } else {
           kids();
         }
     }
   };
-  conv(d.querySelector('main, [role="main"]') || d.body, { depth: 0, pre: false });
-  const markdown = out
+  const out = [];
+  conv(root, { depth: 0, pre: false }, out);
+  return out
+    .join('')
     .replace(/[ \t]+\n/g, '\n')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
+}
+
+/** The main content as Markdown, sliced from `start` to fit the surface.
+ *  The script carries `toMarkdown` as its second argument. */
+function pageExtract(o, markdownOf) {
+  const w = window;
+  const d = document;
+  const BLOCK = /^(block|flex|grid|list-item|table|table-row|flow-root)$/;
+  const markdown = markdownOf(d.querySelector('main, [role="main"]') || d.body, {
+    kind: (el) => {
+      const s = w.getComputedStyle(el);
+      if (s.display === 'none' || s.visibility === 'hidden') return 'hidden';
+      if (s.display === 'table-cell') return 'cell';
+      return BLOCK.test(s.display) ? 'block' : 'inline';
+    },
+    children: (el) =>
+      el.shadowRoot ? [...el.shadowRoot.childNodes, ...el.childNodes] : el.childNodes,
+    link: (el) => el.href,
+  });
   const start = Math.max(0, o.start);
   return { markdown: markdown.slice(start, start + o.maxChars), total: markdown.length, start };
+}
+
+/** The results a search engine's page lists, in order: each title is a
+ *  heading in a link, or a link in a heading, and the rest of the text of
+ *  the box that holds that heading alone is its snippet. A link through
+ *  the engine's own redirect answers the address the redirect carries;
+ *  any other link of the engine's own site, and an ad, is no result. */
+function pageResults(o) {
+  const w = window;
+  const d = document;
+  const collapse = (t) =>
+    String(t || '')
+      .replace(/\s+/g, ' ')
+      .trim();
+  const visible = (el) => {
+    const r = el.getBoundingClientRect();
+    if (!r.width || !r.height) return false;
+    const s = w.getComputedStyle(el);
+    return s.visibility !== 'hidden' && s.opacity !== '0';
+  };
+  const ADS = /(^|\.)(googleadservices\.com|doubleclick\.net)$/;
+  const addressOf = (a) => {
+    let u;
+    try {
+      u = new URL(a.href);
+    } catch {
+      return null;
+    }
+    if (u.protocol !== 'https:' && u.protocol !== 'http:') return null;
+    if (u.hostname !== w.location.hostname) return ADS.test(u.hostname) ? null : u.href;
+    const q = u.searchParams;
+    let to = null;
+    if (u.pathname === '/url') to = q.get('q') || q.get('url');
+    else if (u.pathname === '/l/') to = q.get('uddg');
+    else if (u.pathname === '/ck/a' && (q.get('u') || '').startsWith('a1')) {
+      try {
+        to = w.atob(q.get('u').slice(2).replace(/-/g, '+').replace(/_/g, '/'));
+      } catch {
+        to = null;
+      }
+    }
+    return to && /^https?:\/\//.test(to) ? to : null;
+  };
+  const linkOf = (h) => h.closest('a[href]') || h.querySelector('a[href]');
+  const titles = [...d.querySelectorAll('h2, h3')].filter(
+    (h) => linkOf(h) && visible(h) && !h.closest('[data-text-ad]'),
+  );
+  const alone = (el) => titles.filter((t) => el.contains(t)).length === 1;
+  const results = [];
+  const seen = new Set();
+  for (const h of titles) {
+    const a = linkOf(h);
+    const url = addressOf(a);
+    const title = collapse(h.innerText);
+    if (!url || !title || seen.has(url)) continue;
+    seen.add(url);
+    let box = a.contains(h) ? a : h;
+    while (box.parentElement && box.parentElement !== d.body && alone(box.parentElement)) {
+      box = box.parentElement;
+    }
+    const own = new Set(String(a.innerText).split('\n').map(collapse));
+    const snippet = String(box.innerText)
+      .split('\n')
+      .map(collapse)
+      .filter((l) => l && l !== title && !own.has(l) && !/^https?:\/\/|›/.test(l))
+      .join(' ');
+    results.push({
+      title,
+      url,
+      snippet: snippet.length > o.snippet ? `${snippet.slice(0, o.snippet - 1)}…` : snippet,
+    });
+    if (results.length >= o.max) break;
+  }
+  return results;
 }
 
 /** Draws, or removes, a numbered box over every stamped element in the
@@ -833,12 +912,474 @@ function pageOverlay(o) {
   return n;
 }
 
+// ---- Reading a page without a tab ----------------------------------------
+
+/** Elements that hold nothing and have no end tag. */
+const VOID_TAGS = new Set([
+  'area',
+  'base',
+  'br',
+  'col',
+  'embed',
+  'hr',
+  'img',
+  'input',
+  'link',
+  'meta',
+  'param',
+  'source',
+  'track',
+  'wbr',
+]);
+/** Elements whose content is text up to their own end tag. */
+const RAW_TAGS = new Set(['script', 'style', 'textarea', 'title', 'noscript', 'iframe', 'xmp']);
+/** For a start tag, the open elements it ends, and those beyond which it
+ *  ends none, as an HTML parser closes them without their end tags. */
+const ENDS = {
+  li: [['li'], ['ul', 'ol', 'menu']],
+  dt: [['dt', 'dd'], ['dl']],
+  dd: [['dt', 'dd'], ['dl']],
+  tr: [
+    ['tr', 'td', 'th'],
+    ['table', 'thead', 'tbody', 'tfoot'],
+  ],
+  td: [
+    ['td', 'th'],
+    ['tr', 'table'],
+  ],
+  th: [
+    ['td', 'th'],
+    ['tr', 'table'],
+  ],
+  thead: [['thead', 'tbody', 'tfoot', 'tr', 'td', 'th'], ['table']],
+  tbody: [['thead', 'tbody', 'tfoot', 'tr', 'td', 'th'], ['table']],
+  tfoot: [['thead', 'tbody', 'tfoot', 'tr', 'td', 'th'], ['table']],
+  option: [['option'], ['select', 'datalist']],
+};
+/** The start tags that end an open paragraph. */
+const ENDS_P = new Set([
+  'address',
+  'article',
+  'aside',
+  'blockquote',
+  'details',
+  'div',
+  'dl',
+  'fieldset',
+  'figcaption',
+  'figure',
+  'footer',
+  'form',
+  'h1',
+  'h2',
+  'h3',
+  'h4',
+  'h5',
+  'h6',
+  'header',
+  'hr',
+  'li',
+  'main',
+  'nav',
+  'ol',
+  'p',
+  'pre',
+  'section',
+  'table',
+  'ul',
+]);
+const BLOCK_TAGS = new Set([
+  'address',
+  'article',
+  'aside',
+  'body',
+  'caption',
+  'center',
+  'dd',
+  'details',
+  'dialog',
+  'div',
+  'dl',
+  'dt',
+  'fieldset',
+  'figcaption',
+  'figure',
+  'footer',
+  'form',
+  'header',
+  'hgroup',
+  'legend',
+  'li',
+  'main',
+  'p',
+  'section',
+  'summary',
+  'tr',
+]);
+
+/** The entities a page names, beyond the numbered ones: the Latin-1 set
+ *  in code point order from 160, then the common others. */
+const ENTITIES = (() => {
+  const latin1 =
+    'nbsp iexcl cent pound curren yen brvbar sect uml copy ordf laquo not shy reg macr deg plusmn sup2 sup3 acute micro para middot cedil sup1 ordm raquo frac14 frac12 frac34 iquest Agrave Aacute Acirc Atilde Auml Aring AElig Ccedil Egrave Eacute Ecirc Euml Igrave Iacute Icirc Iuml ETH Ntilde Ograve Oacute Ocirc Otilde Ouml times Oslash Ugrave Uacute Ucirc Uuml Yacute THORN szlig agrave aacute acirc atilde auml aring aelig ccedil egrave eacute ecirc euml igrave iacute icirc iuml eth ntilde ograve oacute ocirc otilde ouml divide oslash ugrave uacute ucirc uuml yacute thorn yuml';
+  const named = Object.fromEntries(
+    latin1.split(' ').map((name, i) => [name, String.fromCharCode(160 + i)]),
+  );
+  return Object.assign(named, {
+    amp: '&',
+    lt: '<',
+    gt: '>',
+    quot: '"',
+    apos: "'",
+    ndash: '–',
+    mdash: '—',
+    hellip: '…',
+    lsquo: '‘',
+    rsquo: '’',
+    sbquo: '‚',
+    ldquo: '“',
+    rdquo: '”',
+    bdquo: '„',
+    lsaquo: '‹',
+    rsaquo: '›',
+    bull: '•',
+    trade: '™',
+    euro: '€',
+    dagger: '†',
+    Dagger: '‡',
+    permil: '‰',
+    minus: '−',
+    ensp: ' ',
+    emsp: ' ',
+    thinsp: ' ',
+    zwnj: '‌',
+    zwj: '‍',
+    larr: '←',
+    rarr: '→',
+    uarr: '↑',
+    darr: '↓',
+    harr: '↔',
+  });
+})();
+
+const decodeEntities = (text) =>
+  text.indexOf('&') < 0
+    ? text
+    : text.replace(
+        /&(?:#(\d{1,7})|#[xX]([0-9a-fA-F]{1,6})|([a-zA-Z][a-zA-Z0-9]{1,31}));/g,
+        (all, dec, hex, name) => {
+          if (name) return ENTITIES[name] ?? all;
+          const code = dec ? Number(dec) : parseInt(hex, 16);
+          return code > 0 && code <= 0x10ffff && (code < 0xd800 || code > 0xdfff)
+            ? String.fromCodePoint(code)
+            : '�';
+        },
+      );
+
+/** An element of a parsed document, with what `toMarkdown` reads. */
+class ParsedElement {
+  constructor(localName, attrs) {
+    this.nodeType = 1;
+    this.localName = localName;
+    this.attrs = attrs;
+    this.childNodes = [];
+  }
+
+  getAttribute(name) {
+    return this.attrs.has(name) ? this.attrs.get(name) : null;
+  }
+}
+
+const attributesOf = (inner) => {
+  const attrs = new Map();
+  for (const m of inner.matchAll(
+    /([^\s"'>/=]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+)))?/g,
+  )) {
+    const name = m[1].toLowerCase();
+    if (!attrs.has(name)) attrs.set(name, decodeEntities(m[2] ?? m[3] ?? m[4] ?? ''));
+  }
+  return attrs;
+};
+
+/** Where a tag that opens at `from` ends: its `>` outside a quoted
+ *  value; -1 when it never ends. */
+const tagEnd = (html, from) => {
+  let quote = '';
+  let afterEquals = false;
+  for (let k = from; k < html.length; k += 1) {
+    const c = html[k];
+    if (quote) {
+      if (c === quote) quote = '';
+    } else if (c === '>') {
+      return k;
+    } else if ((c === '"' || c === "'") && afterEquals) {
+      quote = c;
+    } else if (c === '=') {
+      afterEquals = true;
+      continue;
+    }
+    if (!/\s/.test(c)) afterEquals = false;
+  }
+  return -1;
+};
+
+/** The document an HTML text makes, as a tree of elements and texts. */
+function parseHtml(html) {
+  const root = new ParsedElement('#document', new Map());
+  const stack = [root];
+  const top = () => stack[stack.length - 1];
+  const addText = (data) => {
+    if (!data) return;
+    const nodes = top().childNodes;
+    const last = nodes[nodes.length - 1];
+    if (last && last.nodeType === 3) last.data += data;
+    else nodes.push({ nodeType: 3, data });
+  };
+  /** Closes the furthest open element of `names` this side of `stops`. */
+  const closeTo = (names, stops) => {
+    let at = -1;
+    for (let k = stack.length - 1; k > 0; k -= 1) {
+      const name = stack[k].localName;
+      if (names.includes(name)) at = k;
+      else if (stops.includes(name)) break;
+    }
+    if (at > 0) stack.length = at;
+  };
+  let i = 0;
+  while (i < html.length) {
+    const lt = html.indexOf('<', i);
+    if (lt < 0) {
+      addText(decodeEntities(html.slice(i)));
+      break;
+    }
+    addText(decodeEntities(html.slice(i, lt)));
+    i = lt;
+    if (html.startsWith('<!--', lt)) {
+      const end = html.indexOf('-->', lt + 4);
+      i = end < 0 ? html.length : end + 3;
+      continue;
+    }
+    if (html[lt + 1] === '!' || html[lt + 1] === '?') {
+      const end = html.indexOf('>', lt);
+      i = end < 0 ? html.length : end + 1;
+      continue;
+    }
+    const closing = html[lt + 1] === '/';
+    const named = /^[a-zA-Z][^\s/>]*/.exec(html.slice(lt + (closing ? 2 : 1), lt + 80));
+    if (!named) {
+      addText('<');
+      i = lt + 1;
+      continue;
+    }
+    const end = tagEnd(html, lt + (closing ? 2 : 1) + named[0].length);
+    if (end < 0) break;
+    i = end + 1;
+    const tag = named[0].toLowerCase();
+    if (closing) {
+      const open = stack.findLastIndex((el) => el.localName === tag);
+      if (open > 0) stack.length = open;
+      continue;
+    }
+    if (ENDS_P.has(tag)) closeTo(['p'], ['button', 'table', 'td', 'th', 'caption']);
+    if (ENDS[tag]) closeTo(...ENDS[tag]);
+    const el = new ParsedElement(tag, attributesOf(html.slice(lt + 1 + named[0].length, end)));
+    top().childNodes.push(el);
+    if (VOID_TAGS.has(tag)) continue;
+    if (RAW_TAGS.has(tag)) {
+      const close = new RegExp(`</${tag}[\\s/>]`, 'ig');
+      close.lastIndex = i;
+      const found = close.exec(html);
+      const stop = found ? found.index : html.length;
+      const data = html.slice(i, stop);
+      if (data) el.childNodes.push({ nodeType: 3, data: decodeEntities(data) });
+      const after = found ? html.indexOf('>', stop) : -1;
+      i = after < 0 ? html.length : after + 1;
+      continue;
+    }
+    stack.push(el);
+  }
+  return root;
+}
+
+/** The first element under a node that `test` accepts, in document order. */
+const findElement = (node, test) => {
+  for (const child of node.childNodes) {
+    if (child.nodeType !== 1) continue;
+    if (test(child)) return child;
+    const found = findElement(child, test);
+    if (found) return found;
+  }
+  return null;
+};
+
+const HIDING_STYLE = /(^|;)\s*(display\s*:\s*none|visibility\s*:\s*hidden)/i;
+/** What sits around a page's content, which its styles would hide or set
+ *  aside: elements, roles, and the words of a class or id, unless those
+ *  words also name the content. */
+const AROUND_TAGS = new Set(['nav', 'aside', 'footer', 'button', 'dialog', 'menu']);
+const AROUND_ROLES = new Set([
+  'navigation',
+  'banner',
+  'contentinfo',
+  'complementary',
+  'menu',
+  'menubar',
+  'dialog',
+  'search',
+]);
+const AROUND_WORDS =
+  /(^|[\s_-])(menu|dropdown|navbar|nav|sidebar|footer|breadcrumbs?|banner|cookies?|consent|popup|modal|share|social|related|comments?|advert|ads|sponsored|newsletter|subscribe|toc)([\s_-]|$)/i;
+const CONTENT_WORDS = /(^|[\s_-])(content|article|main|body|post|entry|story)([\s_-]|$)/i;
+/** The elements that hold a page's content whatever their classes say. */
+const CONTENT_TAGS = new Set(['body', 'main', 'article']);
+
+/** Where a fetched page's element stands, with no styles to read. */
+const fetchedKind = (el) => {
+  const named = `${el.getAttribute('class') ?? ''} ${el.getAttribute('id') ?? ''}`;
+  if (
+    el.attrs.has('hidden') ||
+    HIDING_STYLE.test(el.getAttribute('style') ?? '') ||
+    AROUND_TAGS.has(el.localName) ||
+    AROUND_ROLES.has(el.getAttribute('role')) ||
+    (!CONTENT_TAGS.has(el.localName) && AROUND_WORDS.test(named) && !CONTENT_WORDS.test(named))
+  ) {
+    return 'hidden';
+  }
+  if (el.localName === 'td' || el.localName === 'th') return 'cell';
+  return BLOCK_TAGS.has(el.localName) ? 'block' : 'inline';
+};
+
+/** A fetched page as Markdown: its title, and the content of its main
+ *  part, else of its body, without what `fetchedKind` sets aside. */
+function htmlMarkdown(html, address) {
+  const doc = parseHtml(html);
+  const title = findElement(doc, (el) => el.localName === 'title');
+  const base = findElement(doc, (el) => el.localName === 'base' && el.attrs.has('href'));
+  let at = address;
+  try {
+    if (base) at = new URL(base.getAttribute('href'), address).href;
+  } catch {
+    at = address;
+  }
+  const main =
+    findElement(doc, (el) => el.localName === 'main' || el.getAttribute('role') === 'main') ||
+    findElement(doc, (el) => el.localName === 'body') ||
+    doc;
+  const markdown = toMarkdown(main, {
+    kind: fetchedKind,
+    children: (el) => el.childNodes,
+    link: (el) => {
+      try {
+        return new URL(el.getAttribute('href'), at).href;
+      } catch {
+        return null;
+      }
+    },
+  });
+  const text = title?.childNodes[0]?.data ?? '';
+  return { title: text.replace(/\s+/g, ' ').trim(), markdown };
+}
+
+const bytesOf = (base64) => {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let k = 0; k < binary.length; k += 1) bytes[k] = binary.charCodeAt(k);
+  return bytes;
+};
+
+/** A body's text in the encoding its type names, else the one its markup
+ *  declares, else UTF-8. */
+const textOf = (bytes, type) => {
+  const head = new TextDecoder('windows-1252').decode(bytes.subarray(0, 4096));
+  const label =
+    /charset=["']?([\w.:-]+)/i.exec(type)?.[1] ??
+    /<meta[^>]+charset\s*=\s*["']?([\w.:-]+)/i.exec(head)?.[1] ??
+    'utf-8';
+  let decoder;
+  try {
+    decoder = new TextDecoder(label);
+  } catch {
+    decoder = new TextDecoder('utf-8');
+  }
+  return decoder.decode(bytes);
+};
+
+/** One page for the read tool: the address it landed on, its title and
+ *  its Markdown from `start`, at most `cap` characters, or why it could
+ *  not be read. */
+const readPage = async (address, start, cap) => {
+  let url;
+  try {
+    url = new URL(address);
+  } catch {
+    return { url: address, error: 'is not a web address' };
+  }
+  if (url.protocol !== 'https:' && url.protocol !== 'http:') {
+    return { url: address, error: 'is not an http or https address' };
+  }
+  let answer;
+  try {
+    answer = await held.net.fetch({
+      url: url.href,
+      headers: READ_HEADERS,
+      timeoutMs: READ_TIMEOUT_MS,
+    });
+  } catch (e) {
+    return { url: url.href, error: e instanceof Error ? e.message : String(e) };
+  }
+  const landedAt = answer.url;
+  const type = (
+    Object.entries(answer.headers).find(([name]) => name.toLowerCase() === 'content-type')?.[1] ??
+    ''
+  ).toLowerCase();
+  const bytes = bytesOf(answer.body);
+  const text = textOf(bytes, type);
+  const html = /html/.test(type) || (!type && /^\s*</.test(text));
+  if (!html && !/^text\/|json|xml|javascript/.test(type)) {
+    return {
+      url: landedAt,
+      error: `is a ${type.split(';')[0] || 'binary'} file, which the reader does not read`,
+    };
+  }
+  const { title, markdown } = html
+    ? htmlMarkdown(text, landedAt)
+    : { title: '', markdown: text.trim() };
+  if (answer.status >= 400) {
+    const refused = [401, 403, 429, 503].includes(answer.status);
+    return {
+      url: landedAt,
+      error: `answered ${answer.status}${title ? ` "${title}"` : ''}${
+        refused
+          ? `; the site may let only a browser in, so open it with ${held.app.id}_navigate`
+          : ''
+      }`,
+    };
+  }
+  if (html && markdown.length < 200 && /<script/i.test(text)) {
+    return {
+      url: landedAt,
+      title,
+      error: `shows its content only through scripts, which the reader does not run; open it with ${held.app.id}_navigate and read it with ${held.app.id}_extract`,
+    };
+  }
+  const from = Math.min(start, markdown.length);
+  return {
+    url: landedAt,
+    title,
+    markdown: markdown.slice(from, from + cap),
+    start: from,
+    total: markdown.length,
+  };
+};
+
 // ---- The backend ----------------------------------------------------------
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-/** A page script call as the one expression the surface evaluates. */
-const script = (fn, arg) => `(${fn})(${JSON.stringify(arg)})`;
+/** A page script call as the one expression the surface evaluates: the
+ *  function with its argument, then the functions it takes after it. */
+const script = (fn, arg, helpers) =>
+  `(${fn})(${[JSON.stringify(arg), ...helpers.map(String)].join(', ')})`;
 
 const parseIndex = (value) => {
   const n = Number(value);
@@ -894,9 +1435,9 @@ const guarded = async (op, args) => {
 /** Runs a page script in the session's tab and parses its answer.
  *  `guard` routes a challenge page to the handoff; `settle` makes the
  *  surface wait for the navigation the script may have started. */
-const runScript = async (fn, arg, { guard = false, settle = false } = {}) => {
+const runScript = async (fn, arg, { guard = false, settle = false, helpers = [] } = {}) => {
   const out = await (guard ? guarded : send)('evaluate', {
-    js: script(fn, { attr: INDEX_ATTR, ...arg }),
+    js: script(fn, { attr: INDEX_ATTR, ...arg }, helpers),
     settle,
   });
   let value;
@@ -910,9 +1451,6 @@ const runScript = async (fn, arg, { guard = false, settle = false } = {}) => {
 
 const landed = (out) => `${out.title ? `"${out.title}" — ` : ''}${out.url ?? ''}`;
 
-/** The indexed state of the session's tab. A page swapping documents
- *  under the script answers with an error once; the second pass reads
- *  the document that landed. */
 /** The words of a state's scroll line. */
 const scrollWords = (value) => {
   const where = `${value.above ? `${value.above}px above` : 'top of page'}, ${
@@ -962,6 +1500,66 @@ const formatOptions = (value) =>
         .join('\n')
     : null;
 
+/** Clicks the middle of the indexed element as the person would; with
+ *  `field`, only an element that takes text. */
+const pressOn = async (index, field = false) => {
+  const { value } = await runScript(pageTarget, { index, field });
+  if (value === 'missing') throw gone(index);
+  if (value === 'select') throw new Error(`[${index}] is a dropdown — use select_dropdown`);
+  if (value === 'not-editable') throw new Error(`[${index}] does not take text`);
+  if (value === 'hidden') throw new Error(`[${index}] has no size on the page — call state`);
+  if (typeof value === 'string') {
+    throw new Error(
+      `[${index}] is covered by a <${value.slice('covered:'.length)}> — close or scroll past what covers it`,
+    );
+  }
+  await send('click', value);
+};
+
+/** Other names of keys, as a model may write them. */
+const KEY_NAMES = {
+  ctrl: 'Control',
+  cmd: 'Meta',
+  command: 'Meta',
+  win: 'Meta',
+  option: 'Alt',
+  esc: 'Escape',
+  return: 'Enter',
+  del: 'Delete',
+  up: 'ArrowUp',
+  down: 'ArrowDown',
+  left: 'ArrowLeft',
+  right: 'ArrowRight',
+  pgup: 'PageUp',
+  pgdn: 'PageDown',
+};
+
+/** A combination in the names the surface takes: `ctrl+a` is `Control+a`. */
+const keyCombo = (combo) =>
+  combo
+    .split(/\+(?=.)/)
+    .map((part) => KEY_NAMES[part.toLowerCase()] ?? part)
+    .join('+');
+
+/** A search's answer: the results as a numbered list. */
+const resultLines = (results) =>
+  results
+    .map((r, i) => `${i + 1}. ${r.title}\n   ${r.url}${r.snippet ? `\n   ${r.snippet}` : ''}`)
+    .join('\n');
+
+/** A read's answer for one page: where it landed, then its Markdown and
+ *  where to continue, or why it could not be read. */
+const pageLines = (page, i, count) => {
+  const head = `Page ${i + 1} of ${count}: ${page.title ? `"${page.title}" — ` : ''}${page.url}`;
+  if (page.error) return `${head}\nNot read: it ${page.error}.`;
+  const end = page.start + page.markdown.length;
+  const more =
+    end < page.total
+      ? `\n[Characters ${page.start}–${end} of ${page.total}; call read_pages with this address and start=${end} for the rest.]`
+      : '';
+  return `${head}\n\n${page.markdown || '(the page has no content)'}${more}`;
+};
+
 /** What a tool answers while the person keeps the agent out. */
 const OFF =
   "The person turned off agent control in the Browser's settings. Ask them to turn it on, or answer without the browser.";
@@ -979,11 +1577,41 @@ const tools = {
     return after(out.shown ? 'Navigated.' : QUIET_NOTE('Navigated'), 0);
   },
   async search({ query, engine }) {
-    const to = SEARCH_ENGINES[String(engine ?? 'google')];
-    if (!to) throw new Error(`unknown search engine "${String(engine)}"`);
+    const name = String(engine ?? 'google');
+    const to = SEARCH_ENGINES[name];
+    if (!to) throw new Error(`unknown search engine "${name}"`);
     const out = await guarded('navigate', { url: to(String(query)) });
     const did = `Searched for "${String(query)}"`;
-    return after(out.shown ? `${did}.` : QUIET_NOTE(did), 0);
+    const lead = out.shown ? `${did}.` : QUIET_NOTE(did);
+    const listed = () =>
+      runScript(pageResults, { max: RESULTS_MOST, snippet: SNIPPET_CHARS }, { guard: true });
+    let { value: results } = await listed();
+    if (!results.length) {
+      // A page that draws its results with scripts lists them a moment
+      // after it has loaded.
+      await sleep(1000);
+      ({ value: results } = await listed());
+    }
+    const text = results.length
+      ? `${lead}\n\n${resultLines(results)}\n\nRead pages with ${held.app.id}_read_pages, several at once; ${held.app.id}_navigate opens one in the tab.`
+      : `${lead} The page lists no results; if it is a check or shows none, search with another engine: ${Object.keys(
+          SEARCH_ENGINES,
+        )
+          .filter((other) => other !== name)
+          .join(' or ')}.\n\n${await stateOf()}`;
+    return { content: [{ kind: 'text', text }], structured: { query: String(query), results } };
+  },
+  async read_pages({ urls, start }) {
+    const list = [...new Set(urls.map((u) => String(u).trim()))].filter(Boolean);
+    if (!list.length) throw new Error('urls names no address');
+    if (list.length > READ_PAGES_MOST) {
+      throw new Error(`read takes at most ${READ_PAGES_MOST} addresses at once`);
+    }
+    const from = Number(start) > 0 ? Math.floor(Number(start)) : 0;
+    const cap = Math.min(EXTRACT_CHARS, Math.floor(READ_CHARS / list.length));
+    const pages = await Promise.all(list.map((url) => readPage(url, from, cap)));
+    const text = pages.map((page, i) => pageLines(page, i, pages.length)).join('\n\n');
+    return { content: [{ kind: 'text', text }], structured: { pages } };
   },
   async show() {
     await send('show', {});
@@ -996,25 +1624,21 @@ const tools = {
   state: () => stateOf(),
   async click({ index }) {
     const i = parseIndex(index);
-    const { value } = await runScript(pageClick, { index: i }, { settle: true });
-    if (value === 'missing') throw gone(i);
+    await pressOn(i);
     return after(`Clicked [${i}].`, 300);
   },
   async input({ index, text, clear }) {
     const i = parseIndex(index);
-    const { value } = await runScript(pageInput, {
-      index: i,
-      text: String(text),
-      clear: clear !== false,
-    });
+    await pressOn(i, true);
+    const { value } = await runScript(pageCaret, { index: i, clear: clear !== false });
     if (value === 'missing') throw gone(i);
-    if (value === 'select') throw new Error(`[${i}] is a dropdown — use select_dropdown`);
-    if (value !== 'ok') throw new Error(`[${i}] does not take text`);
+    await send('type', { text: String(text) });
     return after(`Typed into [${i}].`, 200);
   },
   async send_keys({ keys }) {
-    const { value } = await runScript(pageKeys, { keys: String(keys) });
-    return after(`Sent keys: ${value || '(none)'}.`, 800);
+    const combos = String(keys).trim().split(/\s+/).filter(Boolean).map(keyCombo);
+    for (const key of combos) await send('press', { key });
+    return after(`Sent keys: ${combos.join(', ') || '(none)'}.`, 800);
   },
   async scroll({ down, pages, index }) {
     const count = Number(pages) > 0 ? Number(pages) : 1;
@@ -1090,7 +1714,7 @@ const tools = {
     let { value } = await runScript(pageSelectDropdown, arg);
     if (value === 'closed') {
       // A custom dropdown lists its options only once opened.
-      await runScript(pageClick, { index: i });
+      await pressOn(i);
       await sleep(400);
       ({ value } = await runScript(pageSelectDropdown, arg));
     }
@@ -1099,11 +1723,16 @@ const tools = {
     if (value === 'no-option') {
       throw new Error(`[${i}] has no option "${String(text)}" — call dropdown_options`);
     }
-    return after(`Selected "${String(value).slice('selected:'.length)}" in [${i}].`, 200);
+    if (value.x !== undefined) await send('click', { x: value.x, y: value.y });
+    return after(`Selected "${value.selected}" in [${i}].`, 200);
   },
   async extract({ start }) {
     const from = Number(start) > 0 ? Math.floor(Number(start)) : 0;
-    const { out, value } = await runScript(pageExtract, { start: from, maxChars: EXTRACT_CHARS });
+    const { out, value } = await runScript(
+      pageExtract,
+      { start: from, maxChars: EXTRACT_CHARS },
+      { helpers: [toMarkdown] },
+    );
     const end = value.start + value.markdown.length;
     const more =
       end < value.total
