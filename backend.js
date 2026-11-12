@@ -9,11 +9,11 @@
  * The page reaches the model as an indexed state, and the functions under
  * "page scripts" run inside the page, reaching only `window`, `document`
  * and their arguments. Clicks, typing and keys reach the page as the
- * person's own input. A search answers the results as a list. The read
- * tool needs no tab: it fetches pages through the backend's own network
- * and turns them into Markdown with the converter the extract tool runs
- * in the page. A bot check is never defeated and a password is never
- * typed: a challenge page or a sign-in page raises the handoff, the
+ * person's own input. A search answers the results as a list. The
+ * read_pages tool needs no tab: it fetches pages through the backend's own
+ * network and turns them into Markdown with the converter the extract
+ * tool runs in the page. A bot check is never defeated and a password is
+ * never typed: a challenge page or a sign-in page raises the handoff, the
  * person takes the tab, and the command runs again.
  */
 
@@ -1325,7 +1325,10 @@ const readPage = async (address, start, cap) => {
       timeoutMs: READ_TIMEOUT_MS,
     });
   } catch (e) {
-    return { url: url.href, error: e instanceof Error ? e.message : String(e) };
+    return {
+      url: url.href,
+      error: `could not be reached: ${e instanceof Error ? e.message : String(e)}`,
+    };
   }
   const landedAt = answer.url;
   const type = (
