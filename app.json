@@ -7,7 +7,7 @@
     "light": "assets/icon-light.svg",
     "dark": "assets/icon-dark.svg"
   },
-  "description": "A web browser in Hearthscale's tabs, which an app's agent also drives with tools: it sees the page as numbered interactive elements, acts on them by number in front of you, signed in as you, and hands the tab over at a sign-in page or a bot check. An agent can also read pages quickly without opening them.",
+  "description": "A web browser in Hearthscale's tabs, which an app's agent also drives with tools: it sees the page as numbered interactive elements, acts on them by number in front of you, signed in as you, and hands the tab over at a sign-in page or a bot check. An agent can also search and read pages quickly without opening them.",
   "environment": {
     "kind": "process",
     "network": [
@@ -69,23 +69,13 @@
     {
       "name": "search",
       "title": "Search the web",
-      "description": "Search the web for a query in the session's browser tab and answer the results as a numbered list, each with its title, address and snippet. Prefer this over guessing a URL. When the session has no tab, the results load in a hidden tab, which the person sees only after the show tool; a tab the person already sees comes to the front.",
+      "description": "Search the web and answer the results as a numbered list, each with its title, address and snippet. Prefer this over guessing a URL. In a browser tab the person sees, the search runs there on Google. Otherwise it runs on DuckDuckGo with no tab, and the person sees only your answer; navigate opens a result in a tab.",
       "input": {
         "type": "object",
         "properties": {
           "query": {
             "type": "string",
             "description": "The search query"
-          },
-          "engine": {
-            "type": "string",
-            "enum": [
-              "google",
-              "duckduckgo",
-              "bing"
-            ],
-            "default": "google",
-            "description": "The search engine; google unless asked otherwise"
           }
         },
         "required": [

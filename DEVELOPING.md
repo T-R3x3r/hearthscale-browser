@@ -18,9 +18,15 @@ its name; it installs from the Marketplace like any other app.
   navigation with no tab opens one out of sight, and `show` puts that
   same tab beside the conversation. Clicks, typing and keys go to the page
   as the browser's own input (`click`, `type` and `press`), so a page sees
-  them as a person's. `search` answers the results of the engine's page as
-  a list, and as a structured result for programs. A bot check or a
-  sign-in page goes to the person with the `handoff` and `signin` cards.
+  them as a person's. A bot check or a sign-in page goes to the person
+  with the `handoff` and `signin` cards.
+- `search` answers the results as a list, and as a structured result for
+  programs. It runs on Google in the session's tab while the person sees
+  that tab, as the last tab command's `shown` said, and otherwise reads
+  DuckDuckGo's page without scripts (`html.duckduckgo.com`) through
+  `net.fetch`, with no tab and no window. DuckDuckGo answers that page
+  with its own bot check (status 202, `anomaly-modal`) for several minutes
+  after a few searches in quick succession.
 - `read_pages` needs no tab and no window: it fetches pages through the
   backend's own network (`net.fetch`) and turns them into Markdown with the
   converter `extract` runs inside the page, `toMarkdown`. With no styles to

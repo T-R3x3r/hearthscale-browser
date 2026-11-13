@@ -10,7 +10,7 @@ To let an agent do the browsing, ask it in a conversation:
 
 > Find the official documentation for this library's timeout option. Explain what it controls and include the source link.
 
-The agent reads pages in a tab you do not see, until you want to: **Show the page** puts that tab beside the conversation, exactly as the agent left it. A tab an agent drives shows a dot, so a page never changes without a sign. To read pages quickly, the agent can also fetch up to five at once without a tab; such a read runs no page scripts and uses none of your sign-ins.
+The agent reads pages in a tab you do not see, until you want to: **Show the page** puts that tab beside the conversation, exactly as the agent left it. A tab an agent drives shows a dot, so a page never changes without a sign. To read pages quickly, the agent can also fetch up to five at once without a tab; such a read runs no page scripts and uses none of your sign-ins. A search in a tab you can see uses Google. A search whose results appear only in the conversation uses DuckDuckGo and opens no tab.
 
 ## What the Browser asks for
 

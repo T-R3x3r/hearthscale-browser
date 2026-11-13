@@ -9,9 +9,11 @@
  * The page reaches the model as an indexed state, and the functions under
  * "page scripts" run inside the page, reaching only `window`, `document`
  * and their arguments. Clicks, typing and keys reach the page as the
- * person's own input. A search answers the results as a list. The
- * read_pages tool needs no tab: it fetches pages through the backend's own
- * network and turns them into Markdown with the converter the extract
+ * person's own input. A search runs on Google in the session's tab while
+ * the person sees that tab, and otherwise on DuckDuckGo with no tab; both
+ * answer the results as a list. The read_pages tool and a search with no
+ * tab fetch through the backend's own network, so they need no window;
+ * read_pages turns pages into Markdown with the converter the extract
  * tool runs in the page. A bot check is never defeated and a password is
  * never typed: a challenge page or a sign-in page raises the handoff, the
  * person takes the tab, and the command runs again.
@@ -52,11 +54,11 @@ const NEAR_PX = 200;
 const QUIET_NOTE = (did) =>
   `${did}. The page loaded in the background and the person cannot see it; call ${held.app.id}_show when they ask to see it.`;
 
-const SEARCH_ENGINES = {
-  google: (q) => `https://www.google.com/search?q=${encodeURIComponent(q)}&udm=14`,
-  duckduckgo: (q) => `https://duckduckgo.com/?q=${encodeURIComponent(q)}`,
-  bing: (q) => `https://www.bing.com/search?q=${encodeURIComponent(q)}`,
-};
+/** A search the person sees runs on Google in their tab, where they can
+ *  pass its bot check; a search only the chat shows reads DuckDuckGo's
+ *  results page for browsers without scripts. */
+const GOOGLE_SEARCH = (q) => `https://www.google.com/search?q=${encodeURIComponent(q)}&udm=14`;
+const DUCKDUCKGO_SEARCH = (q) => `https://html.duckduckgo.com/html/?q=${encodeURIComponent(q)}`;
 
 // ---- Page scripts ---------------------------------------------------------
 
@@ -794,11 +796,11 @@ function pageExtract(o, markdownOf) {
   return { markdown: markdown.slice(start, start + o.maxChars), total: markdown.length, start };
 }
 
-/** The results a search engine's page lists, in order: each title is a
- *  heading in a link, or a link in a heading, and the rest of the text of
- *  the box that holds that heading alone is its snippet. A link through
- *  the engine's own redirect answers the address the redirect carries;
- *  any other link of the engine's own site, and an ad, is no result. */
+/** The results Google's page lists, in order: each title is a heading in
+ *  a link, or a link in a heading, and the rest of the text of the box
+ *  that holds that heading alone is its snippet. A link through Google's
+ *  redirect answers the address the redirect carries; any other link of
+ *  Google's own site, and an ad, is no result. */
 function pageResults(o) {
   const w = window;
   const d = document;
@@ -822,17 +824,7 @@ function pageResults(o) {
     }
     if (u.protocol !== 'https:' && u.protocol !== 'http:') return null;
     if (u.hostname !== w.location.hostname) return ADS.test(u.hostname) ? null : u.href;
-    const q = u.searchParams;
-    let to = null;
-    if (u.pathname === '/url') to = q.get('q') || q.get('url');
-    else if (u.pathname === '/l/') to = q.get('uddg');
-    else if (u.pathname === '/ck/a' && (q.get('u') || '').startsWith('a1')) {
-      try {
-        to = w.atob(q.get('u').slice(2).replace(/-/g, '+').replace(/_/g, '/'));
-      } catch {
-        to = null;
-      }
-    }
+    const to = u.pathname === '/url' ? u.searchParams.get('q') || u.searchParams.get('url') : null;
     return to && /^https?:\/\//.test(to) ? to : null;
   };
   const linkOf = (h) => h.closest('a[href]') || h.querySelector('a[href]');
@@ -1201,16 +1193,55 @@ function parseHtml(html) {
   return root;
 }
 
-/** The first element under a node that `test` accepts, in document order. */
-const findElement = (node, test) => {
+/** The elements under a node that `test` accepts, in document order, at
+ *  most `most`; the inside of an accepted element is not searched. */
+const findElements = (node, test, most = Infinity, found = []) => {
   for (const child of node.childNodes) {
+    if (found.length >= most) break;
     if (child.nodeType !== 1) continue;
-    if (test(child)) return child;
-    const found = findElement(child, test);
-    if (found) return found;
+    if (test(child)) found.push(child);
+    else findElements(child, test, most, found);
   }
-  return null;
+  return found;
 };
+
+/** The first element under a node that `test` accepts, in document order. */
+const findElement = (node, test) => findElements(node, test, 1)[0] ?? null;
+
+const hasClass = (el, name) => (el.getAttribute('class') ?? '').split(/\s+/).includes(name);
+
+/** The text under a parsed node, its spaces collapsed. */
+const textUnder = (node) => {
+  const raw = (n) => (n.nodeType === 3 ? n.data : n.childNodes.map(raw).join(''));
+  return raw(node).replace(/\s+/g, ' ').trim();
+};
+
+/** The results DuckDuckGo's page without scripts lists, in order and
+ *  without its ads. Each title links through DuckDuckGo's redirect, whose
+ *  `uddg` carries the address. */
+const duckResults = (doc) =>
+  findElements(doc, (el) => hasClass(el, 'result') && !hasClass(el, 'result--ad'))
+    .map((box) => {
+      const link = findElement(box, (el) => hasClass(el, 'result__a'));
+      if (!link) return null;
+      let url;
+      try {
+        const href = new URL(link.getAttribute('href') ?? '', 'https://duckduckgo.com/');
+        url = href.searchParams.get('uddg') ?? href.href;
+      } catch {
+        return null;
+      }
+      const shown = findElement(box, (el) => hasClass(el, 'result__snippet'));
+      const snippet = shown ? textUnder(shown) : '';
+      return {
+        title: textUnder(link),
+        url,
+        snippet:
+          snippet.length > SNIPPET_CHARS ? `${snippet.slice(0, SNIPPET_CHARS - 1)}…` : snippet,
+      };
+    })
+    .filter((result) => result && result.title && /^https?:\/\//.test(result.url))
+    .slice(0, RESULTS_MOST);
 
 const HIDING_STYLE = /(^|;)\s*(display\s*:\s*none|visibility\s*:\s*hidden)/i;
 /** What sits around a page's content, which its styles would hide or set
@@ -1287,6 +1318,13 @@ const bytesOf = (base64) => {
   return bytes;
 };
 
+/** A fetched answer's content type, in lower case; empty when it names none. */
+const contentType = (answer) =>
+  (
+    Object.entries(answer.headers).find(([name]) => name.toLowerCase() === 'content-type')?.[1] ??
+    ''
+  ).toLowerCase();
+
 /** A body's text in the encoding its type names, else the one its markup
  *  declares, else UTF-8. */
 const textOf = (bytes, type) => {
@@ -1331,10 +1369,7 @@ const readPage = async (address, start, cap) => {
     };
   }
   const landedAt = answer.url;
-  const type = (
-    Object.entries(answer.headers).find(([name]) => name.toLowerCase() === 'content-type')?.[1] ??
-    ''
-  ).toLowerCase();
+  const type = contentType(answer);
   const bytes = bytesOf(answer.body);
   const text = textOf(bytes, type);
   const html = /html/.test(type) || (!type && /^\s*</.test(text));
@@ -1397,8 +1432,18 @@ const gone = (index) =>
 
 let held = null;
 
+/** The sessions whose tab the person sees, as the last tab command of each
+ *  answered. A search reads it before it sends any command, since a
+ *  command waits for a window when none is open. */
+const inSight = new Set();
+
 /** One tab command on the session's executor surface. */
-const send = (op, args) => held.surface.command(op, args);
+const send = async (session, op, args) => {
+  const out = await held.surface.command(op, args);
+  if (out.shown) inSight.add(session);
+  else inSight.delete(session);
+  return out;
+};
 
 /** The page a handoff was last raised for: the person answered it once,
  *  and the page does not ask again until the tab has left it. */
@@ -1406,10 +1451,10 @@ let handedOver = null;
 
 /** A page only the person gets past goes to them with the visible tab:
  *  a bot check, or a sign-in. Answers whether they pressed Done. */
-const handOver = async (out, kind) => {
+const handOver = async (session, out, kind) => {
   if (handedOver === out.url) return false;
   handedOver = out.url;
-  await send('show', {});
+  await send(session, 'show', {});
   const answer = await held.ask(
     kind === 'signin'
       ? {
@@ -1426,11 +1471,11 @@ const handOver = async (out, kind) => {
 
 /** A challenge page goes to the person; on "Done" the same command runs
  *  once more. */
-const guarded = async (op, args) => {
-  const out = await send(op, args);
+const guarded = async (session, op, args) => {
+  const out = await send(session, op, args);
   if (out.url !== handedOver) handedOver = null;
   if (typeof out.title === 'string' && CHALLENGE.test(out.title)) {
-    if (await handOver(out, 'handoff')) return send(op, args);
+    if (await handOver(session, out, 'handoff')) return send(session, op, args);
   }
   return out;
 };
@@ -1438,8 +1483,13 @@ const guarded = async (op, args) => {
 /** Runs a page script in the session's tab and parses its answer.
  *  `guard` routes a challenge page to the handoff; `settle` makes the
  *  surface wait for the navigation the script may have started. */
-const runScript = async (fn, arg, { guard = false, settle = false, helpers = [] } = {}) => {
-  const out = await (guard ? guarded : send)('evaluate', {
+const runScript = async (
+  session,
+  fn,
+  arg,
+  { guard = false, settle = false, helpers = [] } = {},
+) => {
+  const out = await (guard ? guarded : send)(session, 'evaluate', {
     js: script(fn, { attr: INDEX_ATTR, ...arg }, helpers),
     settle,
   });
@@ -1470,15 +1520,14 @@ const scrollWords = (value) => {
  *  under the script answers with an error once; the second pass reads
  *  the document that landed. A page with a bot check or a sign-in goes to
  *  the person first. */
-const stateOf = async () => {
+const stateOf = async (session) => {
+  const read = () => runScript(session, pageState, { maxChars: STATE_CHARS }, { guard: true });
   let failure;
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
-      let { out, value } = await runScript(pageState, { maxChars: STATE_CHARS }, { guard: true });
+      let { out, value } = await read();
       const kind = value.challenge ? 'handoff' : value.signIn ? 'signin' : null;
-      if (kind && (await handOver(out, kind))) {
-        ({ out, value } = await runScript(pageState, { maxChars: STATE_CHARS }, { guard: true }));
-      }
+      if (kind && (await handOver(session, out, kind))) ({ out, value } = await read());
       return [landed(out), scrollWords(value), '', value.text || '(the page shows nothing)'].join(
         '\n',
       );
@@ -1491,9 +1540,9 @@ const stateOf = async () => {
 };
 
 /** An action's answer: what it did, then the state it left. */
-const after = async (note, delayMs) => {
+const after = async (session, note, delayMs) => {
   if (delayMs) await sleep(delayMs);
-  return `${note}\n\n${await stateOf()}`;
+  return `${note}\n\n${await stateOf(session)}`;
 };
 
 const formatOptions = (value) =>
@@ -1505,8 +1554,8 @@ const formatOptions = (value) =>
 
 /** Clicks the middle of the indexed element as the person would; with
  *  `field`, only an element that takes text. */
-const pressOn = async (index, field = false) => {
-  const { value } = await runScript(pageTarget, { index, field });
+const pressOn = async (session, index, field = false) => {
+  const { value } = await runScript(session, pageTarget, { index, field });
   if (value === 'missing') throw gone(index);
   if (value === 'select') throw new Error(`[${index}] is a dropdown — use select_dropdown`);
   if (value === 'not-editable') throw new Error(`[${index}] does not take text`);
@@ -1516,7 +1565,7 @@ const pressOn = async (index, field = false) => {
       `[${index}] is covered by a <${value.slice('covered:'.length)}> — close or scroll past what covers it`,
     );
   }
-  await send('click', value);
+  await send(session, 'click', value);
 };
 
 /** Other names of keys, as a model may write them. */
@@ -1544,11 +1593,71 @@ const keyCombo = (combo) =>
     .map((part) => KEY_NAMES[part.toLowerCase()] ?? part)
     .join('+');
 
-/** A search's answer: the results as a numbered list. */
-const resultLines = (results) =>
-  results
-    .map((r, i) => `${i + 1}. ${r.title}\n   ${r.url}${r.snippet ? `\n   ${r.snippet}` : ''}`)
-    .join('\n');
+/** A search's answer: what it did, then the results as a numbered list
+ *  and how to read them. */
+const searchText = (lead, results) =>
+  [
+    lead,
+    results
+      .map((r, i) => `${i + 1}. ${r.title}\n   ${r.url}${r.snippet ? `\n   ${r.snippet}` : ''}`)
+      .join('\n'),
+    `Read pages with ${held.app.id}_read_pages, several at once; ${held.app.id}_navigate opens one in a tab.`,
+  ].join('\n\n');
+
+/** A search in the session's tab, which the person sees: Google's page
+ *  there, whose bot check goes to the person. */
+const searchInTab = async (session, query) => {
+  const out = await guarded(session, 'navigate', { url: GOOGLE_SEARCH(query) });
+  const did = `Searched Google for "${query}"`;
+  const lead = out.shown ? `${did}.` : QUIET_NOTE(did);
+  const listed = async () =>
+    (
+      await runScript(
+        session,
+        pageResults,
+        { max: RESULTS_MOST, snippet: SNIPPET_CHARS },
+        { guard: true },
+      )
+    ).value;
+  let results = await listed();
+  if (!results.length) {
+    // A page that draws its results with scripts lists them a moment
+    // after it has loaded.
+    await sleep(1000);
+    results = await listed();
+  }
+  if (results.length) return { text: searchText(lead, results), results };
+  // The state hands a bot check to the person, and the page they pass to
+  // lists the results.
+  const state = await stateOf(session);
+  results = await listed();
+  return results.length
+    ? { text: searchText(lead, results), results }
+    : { text: `${lead} The page lists no results.\n\n${state}`, results };
+};
+
+/** A search only the chat shows: DuckDuckGo's page without scripts,
+ *  fetched through the backend's own network, with no tab. */
+const searchWithoutTab = async (query) => {
+  const answer = await held.net.fetch({
+    url: DUCKDUCKGO_SEARCH(query),
+    headers: READ_HEADERS,
+    timeoutMs: READ_TIMEOUT_MS,
+  });
+  const doc = parseHtml(textOf(bytesOf(answer.body), contentType(answer)));
+  if (findElement(doc, (el) => hasClass(el, 'anomaly-modal__modal'))) {
+    throw new Error(
+      `DuckDuckGo shows a bot check instead of results. Search again in a few minutes, or read pages you know with ${held.app.id}_read_pages.`,
+    );
+  }
+  if (answer.status !== 200) throw new Error(`DuckDuckGo answered ${answer.status}`);
+  const results = duckResults(doc);
+  const lead = `Searched DuckDuckGo for "${query}".`;
+  return {
+    text: results.length ? searchText(lead, results) : `${lead} It lists no results.`,
+    results,
+  };
+};
 
 /** A read's answer for one page: where it landed, then its Markdown and
  *  where to continue, or why it could not be read. */
@@ -1574,35 +1683,18 @@ const allowed = async () => {
   return !(settings && typeof settings === 'object' && settings.agent === false);
 };
 
+/** Each tool's body, called with its input and the session of its call. */
 const tools = {
-  async navigate({ url }) {
-    const out = await guarded('navigate', { url: String(url) });
-    return after(out.shown ? 'Navigated.' : QUIET_NOTE('Navigated'), 0);
+  async navigate({ url }, session) {
+    const out = await guarded(session, 'navigate', { url: String(url) });
+    return after(session, out.shown ? 'Navigated.' : QUIET_NOTE('Navigated'), 0);
   },
-  async search({ query, engine }) {
-    const name = String(engine ?? 'google');
-    const to = SEARCH_ENGINES[name];
-    if (!to) throw new Error(`unknown search engine "${name}"`);
-    const out = await guarded('navigate', { url: to(String(query)) });
-    const did = `Searched for "${String(query)}"`;
-    const lead = out.shown ? `${did}.` : QUIET_NOTE(did);
-    const listed = () =>
-      runScript(pageResults, { max: RESULTS_MOST, snippet: SNIPPET_CHARS }, { guard: true });
-    let { value: results } = await listed();
-    if (!results.length) {
-      // A page that draws its results with scripts lists them a moment
-      // after it has loaded.
-      await sleep(1000);
-      ({ value: results } = await listed());
-    }
-    const text = results.length
-      ? `${lead}\n\n${resultLines(results)}\n\nRead pages with ${held.app.id}_read_pages, several at once; ${held.app.id}_navigate opens one in the tab.`
-      : `${lead} The page lists no results; if it is a check or shows none, search with another engine: ${Object.keys(
-          SEARCH_ENGINES,
-        )
-          .filter((other) => other !== name)
-          .join(' or ')}.\n\n${await stateOf()}`;
-    return { content: [{ kind: 'text', text }], structured: { query: String(query), results } };
+  async search({ query }, session) {
+    const words = String(query);
+    const { text, results } = inSight.has(session)
+      ? await searchInTab(session, words)
+      : await searchWithoutTab(words);
+    return { content: [{ kind: 'text', text }], structured: { query: words, results } };
   },
   async read_pages({ urls, start }) {
     const list = [...new Set(urls.map((u) => String(u).trim()))].filter(Boolean);
@@ -1616,51 +1708,58 @@ const tools = {
     const text = pages.map((page, i) => pageLines(page, i, pages.length)).join('\n\n');
     return { content: [{ kind: 'text', text }], structured: { pages } };
   },
-  async show() {
-    await send('show', {});
+  async show(_, session) {
+    await send(session, 'show', {});
     return 'The tab is in front of the person now.';
   },
-  async go_back() {
-    await send('evaluate', { js: '(history.back(), true)' });
-    return after('Went back.', 800);
+  async go_back(_, session) {
+    await send(session, 'evaluate', { js: '(history.back(), true)' });
+    return after(session, 'Went back.', 800);
   },
-  state: () => stateOf(),
-  async click({ index }) {
+  state: (_, session) => stateOf(session),
+  async click({ index }, session) {
     const i = parseIndex(index);
-    await pressOn(i);
-    return after(`Clicked [${i}].`, 300);
+    await pressOn(session, i);
+    return after(session, `Clicked [${i}].`, 300);
   },
-  async input({ index, text, clear }) {
+  async input({ index, text, clear }, session) {
     const i = parseIndex(index);
-    await pressOn(i, true);
-    const { value } = await runScript(pageCaret, { index: i, clear: clear !== false });
+    await pressOn(session, i, true);
+    const { value } = await runScript(session, pageCaret, { index: i, clear: clear !== false });
     if (value === 'missing') throw gone(i);
-    await send('type', { text: String(text) });
-    return after(`Typed into [${i}].`, 200);
+    await send(session, 'type', { text: String(text) });
+    return after(session, `Typed into [${i}].`, 200);
   },
-  async send_keys({ keys }) {
+  async send_keys({ keys }, session) {
     const combos = String(keys).trim().split(/\s+/).filter(Boolean).map(keyCombo);
-    for (const key of combos) await send('press', { key });
-    return after(`Sent keys: ${combos.join(', ') || '(none)'}.`, 800);
+    for (const key of combos) await send(session, 'press', { key });
+    return after(session, `Sent keys: ${combos.join(', ') || '(none)'}.`, 800);
   },
-  async scroll({ down, pages, index }) {
+  async scroll({ down, pages, index }, session) {
     const count = Number(pages) > 0 ? Number(pages) : 1;
     const i = index === undefined ? 0 : parseIndex(index);
-    const { value } = await runScript(pageScroll, { down: down !== false, pages: count, index: i });
+    const { value } = await runScript(session, pageScroll, {
+      down: down !== false,
+      pages: count,
+      index: i,
+    });
     if (value === 'missing') throw gone(i);
     const note = value.moved
       ? `Scrolled ${value.target} ${Math.abs(value.moved)}px ${value.moved > 0 ? 'down' : 'up'}.`
       : `${value.target} did not move — it is already at the ${down !== false ? 'bottom' : 'top'}.`;
-    return after(note, 300);
+    return after(session, note, 300);
   },
-  async find_text({ text }) {
-    const { out, value: passage } = await runScript(pageFindText, {
+  async find_text({ text }, session) {
+    const { out, value: passage } = await runScript(session, pageFindText, {
       text: String(text),
       around: 300,
     });
-    if (passage === null) return after(`"${String(text)}" is not on the page.`, 200);
+    if (passage === null) return after(session, `"${String(text)}" is not on the page.`, 200);
     await sleep(200);
-    const { value } = await runScript(pageState, { maxChars: STATE_CHARS, near: NEAR_PX });
+    const { value } = await runScript(session, pageState, {
+      maxChars: STATE_CHARS,
+      near: NEAR_PX,
+    });
     return [
       `Found "${String(text)}" on ${landed(out)}:`,
       passage,
@@ -1668,9 +1767,12 @@ const tools = {
       value.text ? `Near it:\n${value.text}` : 'No link or control is near it.',
     ].join('\n');
   },
-  async search_page({ pattern, max }) {
+  async search_page({ pattern, max }, session) {
     const cap = Number(max) > 0 ? Math.min(Number(max), 200) : 30;
-    const { out, value } = await runScript(pageSearch, { pattern: String(pattern), max: cap });
+    const { out, value } = await runScript(session, pageSearch, {
+      pattern: String(pattern),
+      max: cap,
+    });
     const body = value.total
       ? `${value.total} matching line${value.total === 1 ? '' : 's'}${
           value.total > value.hits.length ? `, first ${value.hits.length}` : ''
@@ -1678,9 +1780,9 @@ const tools = {
       : 'No line matches.';
     return `${landed(out)}\n\n${body}`;
   },
-  async find_elements({ selector, attributes, max }) {
+  async find_elements({ selector, attributes, max }, session) {
     const cap = Number(max) > 0 ? Math.min(Number(max), 100) : 20;
-    const { out, value } = await runScript(pageFindElements, {
+    const { out, value } = await runScript(session, pageFindElements, {
       selector: String(selector),
       attributes: Array.isArray(attributes) ? attributes.map(String) : [],
       max: cap,
@@ -1699,9 +1801,9 @@ const tools = {
       : 'Nothing matches.';
     return `${landed(out)}\n\n${body}`;
   },
-  async dropdown_options({ index }) {
+  async dropdown_options({ index }, session) {
     const i = parseIndex(index);
-    const { out, value } = await runScript(pageDropdownOptions, { index: i });
+    const { value } = await runScript(session, pageDropdownOptions, { index: i });
     if (value === 'missing') throw gone(i);
     const list = formatOptions(value);
     const body = list
@@ -1711,27 +1813,28 @@ const tools = {
         : `[${i}] is closed — click it, then call dropdown_options again.`;
     return body;
   },
-  async select_dropdown({ index, text }) {
+  async select_dropdown({ index, text }, session) {
     const i = parseIndex(index);
     const arg = { index: i, text: String(text) };
-    let { value } = await runScript(pageSelectDropdown, arg);
+    let { value } = await runScript(session, pageSelectDropdown, arg);
     if (value === 'closed') {
       // A custom dropdown lists its options only once opened.
-      await pressOn(i);
+      await pressOn(session, i);
       await sleep(400);
-      ({ value } = await runScript(pageSelectDropdown, arg));
+      ({ value } = await runScript(session, pageSelectDropdown, arg));
     }
     if (value === 'missing') throw gone(i);
     if (value === 'closed') throw new Error(`[${i}] shows no options after opening`);
     if (value === 'no-option') {
       throw new Error(`[${i}] has no option "${String(text)}" — call dropdown_options`);
     }
-    if (value.x !== undefined) await send('click', { x: value.x, y: value.y });
-    return after(`Selected "${value.selected}" in [${i}].`, 200);
+    if (value.x !== undefined) await send(session, 'click', { x: value.x, y: value.y });
+    return after(session, `Selected "${value.selected}" in [${i}].`, 200);
   },
-  async extract({ start }) {
+  async extract({ start }, session) {
     const from = Number(start) > 0 ? Math.floor(Number(start)) : 0;
     const { out, value } = await runScript(
+      session,
       pageExtract,
       { start: from, maxChars: EXTRACT_CHARS },
       { helpers: [toMarkdown] },
@@ -1743,21 +1846,21 @@ const tools = {
         : '';
     return `${landed(out)}\n\n${value.markdown || '(the page has no content)'}${more}`;
   },
-  async evaluate({ js }) {
-    const out = await send('evaluate', { js: String(js) });
+  async evaluate({ js }, session) {
+    const out = await send(session, 'evaluate', { js: String(js) });
     return out.result === undefined ? '(undefined)' : String(out.result);
   },
-  async wait({ seconds }) {
+  async wait({ seconds }, session) {
     const s = Math.min(30, Math.max(0, Number(seconds) || 0));
-    return after(`Waited ${s} s.`, s * 1000);
+    return after(session, `Waited ${s} s.`, s * 1000);
   },
-  async screenshot() {
-    const { value: boxes } = await runScript(pageOverlay, { show: true });
+  async screenshot(_, session) {
+    const { value: boxes } = await runScript(session, pageOverlay, { show: true });
     let out;
     try {
-      out = await send('screenshot', {});
+      out = await send(session, 'screenshot', {});
     } finally {
-      await runScript(pageOverlay, { show: false }).catch(() => {});
+      await runScript(session, pageOverlay, { show: false }).catch(() => {});
     }
     if (!out.asset) throw new Error('the surface returned no image');
     return {
@@ -1770,8 +1873,8 @@ const tools = {
       ],
     };
   },
-  async close() {
-    await send('close', {});
+  async close(_, session) {
+    await send(session, 'close', {});
     return 'The tab is closed.';
   },
 };
@@ -1783,9 +1886,9 @@ module.exports = {
   tools: Object.fromEntries(
     Object.entries(tools).map(([name, tool]) => [
       name,
-      async (...args) => {
+      async (input, run) => {
         if (!(await allowed())) throw new Error(OFF);
-        return tool(...args);
+        return tool(input, run.context.session);
       },
     ]),
   ),
