@@ -22,7 +22,8 @@ its name; it installs from the Marketplace like any other app.
   with the `handoff` and `signin` cards.
 - `search` answers the results as a list, and as a structured result for
   programs. It runs on Google in the session's tab while the person sees
-  that tab, as the last tab command's `shown` said, and otherwise reads
+  that tab, as the last tab command's `shown` said and a command that opens
+  no tab confirms, since the person may have closed it; otherwise it reads
   DuckDuckGo's page without scripts (`html.duckduckgo.com`) through
   `net.fetch`, with no tab and no window. DuckDuckGo answers that page
   with its own bot check (status 202, `anomaly-modal`) for several minutes

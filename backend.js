@@ -1593,6 +1593,20 @@ const keyCombo = (combo) =>
     .map((part) => KEY_NAMES[part.toLowerCase()] ?? part)
     .join('+');
 
+/** Whether the person still sees the session's tab as a search starts. The
+ *  person may have closed it since the last tab command, which only the
+ *  next command tells: one that opens no tab asks again, and fails when no
+ *  tab is left for it, which clears the record. */
+const tabInSight = async (session) => {
+  if (!inSight.has(session)) return false;
+  try {
+    await send(session, 'evaluate', { js: 'true' });
+  } catch {
+    inSight.delete(session);
+  }
+  return inSight.has(session);
+};
+
 /** A search's answer: what it did, then the results as a numbered list
  *  and how to read them. */
 const searchText = (lead, results) =>
@@ -1691,7 +1705,7 @@ const tools = {
   },
   async search({ query }, session) {
     const words = String(query);
-    const { text, results } = inSight.has(session)
+    const { text, results } = (await tabInSight(session))
       ? await searchInTab(session, words)
       : await searchWithoutTab(words);
     return { content: [{ kind: 'text', text }], structured: { query: words, results } };
