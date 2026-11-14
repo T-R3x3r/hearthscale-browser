@@ -28,10 +28,11 @@ its name; it installs from the Marketplace like any other app.
   (`html.duckduckgo.com`) through `net.fetch`, with no tab and no window.
   DuckDuckGo answers every search from the address with its own bot check
   (status 202, `anomaly-modal`) for several minutes after a few searches
-  in quick succession, so these searches go out one at a time, two
-  seconds apart, across every conversation. A search that still gets the
-  check runs on Google in the session's tab, shown beside the
-  conversation. A helper's conversation is open in no window, where a tab
+  in quick succession, and then shuts the address out altogether, so these
+  searches go out one at a time, two seconds apart, across every
+  conversation, and none goes out for five minutes after a check. A search
+  that gets the check, or comes in those five minutes, runs on Google in
+  the session's tab, shown beside the conversation. A helper's conversation is open in no window, where a tab
   command would wait for one, so a helper's search answers the check as
   an error. Google links each result through `/goto?url=` with a token
   that hides the address, and answers a `HEAD` of it with 200: the list

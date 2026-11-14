@@ -65,8 +65,11 @@ const GOOGLE_SEARCH = (q) => `https://www.google.com/search?q=${encodeURICompone
 const DUCKDUCKGO_FORM = 'https://html.duckduckgo.com/html/';
 /** DuckDuckGo answers a quick run of searches from one address with its
  *  bot check, for several minutes, so its searches go out one at a time,
- *  each this long after the last one ended. */
+ *  each this long after the last one ended. After the check, every search
+ *  from the address gets it again for minutes, so for this long none goes
+ *  out. */
 const DUCKDUCKGO_GAP_MS = 2000;
+const DUCKDUCKGO_REST_MS = 5 * 60_000;
 
 // ---- Page scripts ---------------------------------------------------------
 
@@ -1681,17 +1684,20 @@ const searchInTab = async (session, query, show, why = '') => {
     : { text: `${lead} The page lists no results.\n\n${state}`, results };
 };
 
-/** The end of the last DuckDuckGo search, and the searches waiting for
- *  their turn after it. */
+/** The end of the last DuckDuckGo search, the searches waiting for their
+ *  turn after it, and when DuckDuckGo last showed its bot check. */
 let duckEnded = 0;
 let duckQueue = Promise.resolve();
+let duckChecked = -DUCKDUCKGO_REST_MS;
 
 /** The results of DuckDuckGo's page without scripts, fetched through the
  *  backend's own network with the request its search form sends, or null
  *  when the page shows DuckDuckGo's bot check instead. One search runs at
- *  a time, a gap after the one before. */
+ *  a time, a gap after the one before; while DuckDuckGo still checks the
+ *  address, no search goes out and each answers the check. */
 const duckSearch = (query) => {
   const turn = duckQueue.then(async () => {
+    if (Date.now() < duckChecked + DUCKDUCKGO_REST_MS) return null;
     await sleep(duckEnded + DUCKDUCKGO_GAP_MS - Date.now());
     try {
       const answer = await held.net.fetch({
@@ -1707,7 +1713,10 @@ const duckSearch = (query) => {
         timeoutMs: READ_TIMEOUT_MS,
       });
       const doc = parseHtml(textOf(bytesOf(answer.body), contentType(answer)));
-      if (findElement(doc, (el) => hasClass(el, 'anomaly-modal__modal'))) return null;
+      if (findElement(doc, (el) => hasClass(el, 'anomaly-modal__modal'))) {
+        duckChecked = Date.now();
+        return null;
+      }
       if (answer.status !== 200) throw new Error(`DuckDuckGo answered ${answer.status}`);
       return duckResults(doc);
     } finally {
