@@ -33,10 +33,13 @@ its name; it installs from the Marketplace like any other app.
   check runs on Google in the session's tab, shown beside the
   conversation. A helper's conversation is open in no window, where a tab
   command would wait for one, so a helper's search answers the check as
-  an error.
+  an error. Google links each result through `/goto?url=` with a token
+  that hides the address, and answers a `HEAD` of it with 200: the list
+  keeps that link, which a tab or `read_pages` follows to the page, and
+  names the site Google shows under the title (`cite`).
 - `show` with nothing to show, no tab of the session and no Browser tab
-  that shows a page, keeps the turn: the next `navigate` or `search` of
-  that turn opens its tab in front of the person.
+  that shows a page, remembers the request: the session's next
+  `navigate` or `search` opens its tab in front of the person.
 - `read_pages` needs no tab and no window: it fetches pages through the
   backend's own network (`net.fetch`) and turns them into Markdown with the
   converter `extract` runs inside the page, `toMarkdown`. With no styles to

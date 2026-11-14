@@ -49,7 +49,7 @@
     {
       "name": "navigate",
       "title": "Open a page",
-      "description": "Open a URL in the session's browser tab, wait for the page to settle, and return the page state. With no tab yet, the page opens in a hidden tab, which the person sees after the show tool, or at once when show found no page open earlier in this turn. A tab the person already sees stays in front.",
+      "description": "Open a URL in the session's browser tab, wait for the page to settle, and return the page state. With no tab yet, the page opens in a hidden tab, which the person sees after the show tool, or at once when show found no page open earlier. A tab the person already sees stays in front.",
       "input": {
         "type": "object",
         "properties": {

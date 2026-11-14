@@ -14,7 +14,7 @@
  * search at a time; a search DuckDuckGo answers with its bot check runs
  * on Google in a tab the person sees. Both answer the results as a list.
  * When the person asks to see the browser before any page is open, the
- * next page the turn opens comes in front of them. The read_pages tool and
+ * next page the session opens comes in front of them. The read_pages tool and
  * a search with no tab fetch through the backend's own network, so they
  * need no window;
  * read_pages turns pages into Markdown with the converter the extract
@@ -807,8 +807,11 @@ function pageExtract(o, markdownOf) {
 /** The results Google's page lists, in order: each title is a heading in
  *  a link, or a link in a heading, and the rest of the text of the box
  *  that holds that heading alone is its snippet. A link through Google's
- *  redirect answers the address the redirect carries; any other link of
- *  Google's own site, and an ad, is no result. */
+ *  `/url` redirect answers the address the redirect carries. A link
+ *  through its `/goto` redirect, whose token hides the address, answers
+ *  the redirect itself, which a tab or a read follows to the page, and its
+ *  snippet starts with the site and path Google shows under the title. Any
+ *  other link of Google's own site, and an ad, is no result. */
 function pageResults(o) {
   const w = window;
   const d = document;
@@ -832,6 +835,7 @@ function pageResults(o) {
     }
     if (u.protocol !== 'https:' && u.protocol !== 'http:') return null;
     if (u.hostname !== w.location.hostname) return ADS.test(u.hostname) ? null : u.href;
+    if (u.pathname === '/goto') return u.href;
     const to = u.pathname === '/url' ? u.searchParams.get('q') || u.searchParams.get('url') : null;
     return to && /^https?:\/\//.test(to) ? to : null;
   };
@@ -853,11 +857,14 @@ function pageResults(o) {
       box = box.parentElement;
     }
     const own = new Set(String(a.innerText).split('\n').map(collapse));
-    const snippet = String(box.innerText)
+    const shown = String(box.innerText)
       .split('\n')
       .map(collapse)
       .filter((l) => l && l !== title && !own.has(l) && !/^https?:\/\/|›/.test(l))
       .join(' ');
+    const site =
+      new URL(url).pathname === '/goto' ? collapse(box.querySelector('cite')?.innerText) : '';
+    const snippet = site ? `${site}: ${shown}` : shown;
     results.push({
       title,
       url,
@@ -1454,17 +1461,12 @@ const send = async (session, op, args) => {
 };
 
 /** The sessions whose person asked to see the browser while no page was
- *  open, by the turn they asked in: the next page that turn opens comes
- *  in front of them. */
-const askedToSee = new Map();
+ *  open: the next page the session opens comes in front of them. */
+const askedToSee = new Set();
 
-/** Whether the person asked, in the call's turn, to see a page that was
- *  not open yet; answering it clears the request. */
-const takeAsked = ({ session, turn }) => {
-  const asked = turn !== undefined && askedToSee.get(session) === turn;
-  askedToSee.delete(session);
-  return asked;
-};
+/** Whether the person asked to see a page that was not open yet; the
+ *  answer clears the request. */
+const takeAsked = (session) => askedToSee.delete(session);
 
 /** Whether a window shows the call's conversation, so a tab can open
  *  beside it: a helper's conversation is open in no window, and its tab
@@ -1770,14 +1772,14 @@ const allowed = async () => {
 /** Each tool's body, called with its input, the session of its call and
  *  the call's context. */
 const tools = {
-  async navigate({ url }, session, context) {
+  async navigate({ url }, session) {
     let out = await guarded(session, 'navigate', { url: String(url) });
-    if (takeAsked(context) && !out.shown) out = await send(session, 'show', {});
+    if (takeAsked(session) && !out.shown) out = await send(session, 'show', {});
     return after(session, out.shown ? 'Navigated.' : QUIET_NOTE('Navigated'), 0);
   },
   async search({ query }, session, context) {
     const words = String(query);
-    const asked = takeAsked(context);
+    const asked = takeAsked(session);
     const { text, results } =
       asked || (await tabInSight(session))
         ? await searchInTab(session, words, asked)
@@ -1796,13 +1798,13 @@ const tools = {
     const text = pages.map((page, i) => pageLines(page, i, pages.length)).join('\n\n');
     return { content: [{ kind: 'text', text }], structured: { pages } };
   },
-  async show(_, session, context) {
+  async show(_, session) {
     try {
       await send(session, 'show', {});
     } catch {
       // The session has no tab and no Browser tab shows a page it could
-      // take: the next page this turn opens comes in front of the person.
-      if (context.turn !== undefined) askedToSee.set(session, context.turn);
+      // take: the next page the session opens comes in front of the person.
+      askedToSee.add(session);
       return `No page is open yet. The next page you open with ${held.app.id}_navigate, or the next search with ${held.app.id}_search, opens in a tab in front of the person, and a search there runs on Google.`;
     }
     return `The tab is in front of the person now, and a search with ${held.app.id}_search runs on Google there.`;
