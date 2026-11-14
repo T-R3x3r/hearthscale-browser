@@ -1852,11 +1852,15 @@ const tools = {
   },
   async input({ index, text, clear }, session) {
     const i = parseIndex(index);
+    const words = String(text);
+    // Typing nothing replaces no selection, so Delete clears the field.
+    const empties = !words && clear !== false;
     await pressOn(session, i, true);
     const { value } = await runScript(session, pageCaret, { index: i, clear: clear !== false });
     if (value === 'missing') throw gone(i);
-    await send(session, 'type', { text: String(text) });
-    return after(session, `Typed into [${i}].`, 200);
+    if (empties) await send(session, 'press', { key: 'Delete' });
+    else await send(session, 'type', { text: words });
+    return after(session, empties ? `Cleared [${i}].` : `Typed into [${i}].`, 200);
   },
   async send_keys({ keys }, session) {
     const combos = String(keys).trim().split(/\s+/).filter(Boolean).map(keyCombo);
