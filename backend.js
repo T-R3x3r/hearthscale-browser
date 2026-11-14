@@ -1,26 +1,18 @@
 'use strict';
 /* global window, document */
 /**
- * The Browser plugin's backend: the browser-use action set over
- * Hearthscale's own Chromium. The backend never touches a page itself:
- * each tool sends tab commands to the session's executor surface, which
- * runs them and answers with the page's address and title and whether the
- * tab is shown, so the tab and the tools may sit on different machines.
- * The page reaches the model as an indexed state, and the functions under
- * "page scripts" run inside the page, reaching only `window`, `document`
- * and their arguments. Clicks, typing and keys reach the page as the
- * person's own input. A search runs on Google in the session's tab while
- * the person sees that tab, and otherwise on DuckDuckGo with no tab, one
- * search at a time; a search DuckDuckGo answers with its bot check runs
- * on Google in a tab the person sees. Both answer the results as a list.
- * When the person asks to see the browser before any page is open, the
- * next page the session opens comes in front of them. The read_pages tool and
- * a search with no tab fetch through the backend's own network, so they
- * need no window;
- * read_pages turns pages into Markdown with the converter the extract
- * tool runs in the page. A bot check is never defeated and a password is
- * never typed: a challenge page or a sign-in page raises the handoff, the
- * person takes the tab, and the command runs again.
+ * The Browser's backend: the browser-use action set over Hearthscale's own
+ * Chromium. The backend never touches a page itself: each tool sends tab
+ * commands to the session's executor surface, which runs them and answers
+ * with the page's address and title and whether the tab is shown, so the
+ * tab and the tools may sit on different machines. The page reaches the
+ * model as an indexed state, and the functions under "page scripts" run
+ * inside the page, reaching only `window`, `document` and their arguments.
+ * Clicks, typing and keys reach the page as the person's own input.
+ * `read_pages`, and a search with no tab, fetch through the backend's own
+ * network and need no window. A bot check is never defeated and a password
+ * is never typed: a challenge page or a sign-in page raises the handoff,
+ * the person takes the tab, and the command runs again.
  */
 
 /** Titles that mark a page as a challenge only a human passes. */
@@ -37,7 +29,8 @@ const EXTRACT_CHARS = 12000;
 const READ_CHARS = 20000;
 const READ_PAGES_MOST = 5;
 const READ_TIMEOUT_MS = 20000;
-/** A desktop Chrome's request headers, as the Browser's own pages send. */
+/** A desktop Chrome's request headers, so that a site answers a read as it
+ *  answers a browser. */
 const READ_HEADERS = {
   'user-agent':
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36',
@@ -1776,17 +1769,28 @@ const searchWithoutTab = async (context, query) => {
   };
 };
 
+/** The character offset a tool continues a page from: 0 unless given. */
+const offsetOf = (start) => (Number(start) > 0 ? Math.floor(Number(start)) : 0);
+
+/** A part of a page's Markdown under its heading, then, for a long page,
+ *  the call of `tool` that reads the rest; `which` names what else the
+ *  call takes. */
+const partText = (head, part, tool, which = '') => {
+  const end = part.start + part.markdown.length;
+  const more =
+    end < part.total
+      ? `\n\n[Characters ${part.start}–${end} of ${part.total}; call ${held.app.id}_${tool} with ${which}start=${end} for the rest.]`
+      : '';
+  return `${head}\n\n${part.markdown || '(the page has no content)'}${more}`;
+};
+
 /** A read's answer for one page: where it landed, then its Markdown and
  *  where to continue, or why it could not be read. */
 const pageLines = (page, i, count) => {
   const head = `Page ${i + 1} of ${count}: ${page.title ? `"${page.title}" — ` : ''}${page.url}`;
-  if (page.error) return `${head}\nNot read: it ${page.error}.`;
-  const end = page.start + page.markdown.length;
-  const more =
-    end < page.total
-      ? `\n[Characters ${page.start}–${end} of ${page.total}; call read_pages with this address and start=${end} for the rest.]`
-      : '';
-  return `${head}\n\n${page.markdown || '(the page has no content)'}${more}`;
+  return page.error
+    ? `${head}\nNot read: it ${page.error}.`
+    : partText(head, page, 'read_pages', 'this address and ');
 };
 
 /** What a tool answers while the person keeps the agent out. */
@@ -1823,9 +1827,8 @@ const tools = {
     if (list.length > READ_PAGES_MOST) {
       throw new Error(`read takes at most ${READ_PAGES_MOST} addresses at once`);
     }
-    const from = Number(start) > 0 ? Math.floor(Number(start)) : 0;
     const cap = Math.min(EXTRACT_CHARS, Math.floor(READ_CHARS / list.length));
-    const pages = await Promise.all(list.map((url) => readPage(url, from, cap)));
+    const pages = await Promise.all(list.map((url) => readPage(url, offsetOf(start), cap)));
     const text = pages.map((page, i) => pageLines(page, i, pages.length)).join('\n\n');
     return { content: [{ kind: 'text', text }], structured: { pages } };
   },
@@ -1964,19 +1967,13 @@ const tools = {
     return after(session, `Selected "${value.selected}" in [${i}].`, 200);
   },
   async extract({ start }, session) {
-    const from = Number(start) > 0 ? Math.floor(Number(start)) : 0;
     const { out, value } = await runScript(
       session,
       pageExtract,
-      { start: from, maxChars: EXTRACT_CHARS },
+      { start: offsetOf(start), maxChars: EXTRACT_CHARS },
       { helpers: [toMarkdown] },
     );
-    const end = value.start + value.markdown.length;
-    const more =
-      end < value.total
-        ? `\n\n[Characters ${value.start}–${end} of ${value.total}; call extract with start=${end} for the rest.]`
-        : '';
-    return `${landed(out)}\n\n${value.markdown || '(the page has no content)'}${more}`;
+    return partText(landed(out), value, 'extract');
   },
   async evaluate({ js }, session) {
     const out = await send(session, 'evaluate', { js: String(js) });
