@@ -1,7 +1,7 @@
 {
   "id": "browser",
   "name": "Browser",
-  "version": "2.2.0",
+  "version": "2.2.1",
   "api": 7,
   "hearthscale": "0.4.0",
   "icon": {
