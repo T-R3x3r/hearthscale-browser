@@ -49,7 +49,7 @@
     {
       "name": "navigate",
       "title": "Open a page",
-      "description": "Open a URL in the session's browser tab, wait for the page to settle, and return the page state. With no tab yet, the page opens in a hidden tab, which the person sees after the show tool, or at once when show found no page open earlier. A tab the person already sees stays in front.",
+      "description": "Open a URL in the session's browser tab, wait for the page to settle, and return the page state. With no tab yet, the page opens in a hidden tab, which the person sees after show, or at once when show found no page open. A tab the person already sees stays in front.",
       "input": {
         "type": "object",
         "properties": {
@@ -70,7 +70,7 @@
     {
       "name": "search",
       "title": "Search the web",
-      "description": "Search the web and answer the results as a numbered list, each with its title, address and snippet. Prefer this over guessing a URL. In a browser tab the person sees, the search runs there on Google. Otherwise it runs on DuckDuckGo with no tab, and the person sees only your answer; when DuckDuckGo shows a bot check instead, the search runs on Google in a tab the person then sees. navigate opens a result in a tab.",
+      "description": "Search the web and return a numbered list of results, each with its title, address and snippet. Prefer this over guessing a URL. When the person sees the session's browser tab, the search runs there on Google; otherwise it runs without a tab, unless a bot check moves it to a tab the person then sees.",
       "input": {
         "type": "object",
         "properties": {
@@ -192,7 +192,7 @@
     {
       "name": "show",
       "title": "Show the page",
-      "description": "Bring the session's browser tab in front of the person, in a tab beside the conversation. Call it only when the person asks to see the page or the browser, in words like open it up, show it, pull up, or let me see; a search after it runs on Google in that tab. When no page is open yet, the next page you open or search you run shows there. Never call it for a question the answer alone satisfies.",
+      "description": "Show the session's browser tab beside the conversation. Call it only when the person asks to see the page or the browser, in words like open it up, show it, pull up, or let me see. Later searches run on Google in that tab. With no page open yet, the next page you open or search you run appears there. Never call it for a question the answer alone satisfies.",
       "input": {
         "type": "object",
         "properties": {}
