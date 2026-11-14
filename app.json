@@ -3,6 +3,7 @@
   "name": "Browser",
   "version": "2.1.3",
   "api": 7,
+  "hearthscale": "0.4.0",
   "icon": {
     "light": "assets/icon-light.svg",
     "dark": "assets/icon-dark.svg"
