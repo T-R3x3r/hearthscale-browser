@@ -1450,26 +1450,47 @@ const gone = (index) =>
 
 let held = null;
 
-/** The sessions whose tab the person sees, as the last tab command of each
- *  answered. A search reads it before it sends any command, since a
- *  command waits for a window when none is open. */
-const inSight = new Set();
+/** What the tools keep in the app's store, since an idle backend stops
+ *  after a minute and starts afresh: when DuckDuckGo last showed its bot
+ *  check; `shown`, the sessions whose tab the person sees, as the last tab
+ *  command of each answered, which a search reads before it sends any
+ *  command, since a command waits for a window when none is open; and
+ *  `asked`, the sessions whose person asked to see the browser while no
+ *  page was open, so that the next page the session opens comes in front
+ *  of them. Each list keeps its newest sessions. */
+const KEPT_KEY = 'agent';
+const KEPT_SESSIONS = 20;
+let kept = { checked: 0, shown: [], asked: [] };
+
+const keep = async (change) => {
+  kept = { ...kept, ...change };
+  await held.store.set(KEPT_KEY, kept);
+};
+
+/** Puts the session in a kept list, or takes it out. */
+const mark = async (list, session, on) => {
+  if (kept[list].includes(session) === on) return;
+  await keep({
+    [list]: on
+      ? [...kept[list], session].slice(-KEPT_SESSIONS)
+      : kept[list].filter((s) => s !== session),
+  });
+};
 
 /** One tab command on the session's executor surface. */
 const send = async (session, op, args) => {
   const out = await held.surface.command(op, args);
-  if (out.shown) inSight.add(session);
-  else inSight.delete(session);
+  await mark('shown', session, Boolean(out.shown));
   return out;
 };
 
-/** The sessions whose person asked to see the browser while no page was
- *  open: the next page the session opens comes in front of them. */
-const askedToSee = new Set();
-
 /** Whether the person asked to see a page that was not open yet; the
  *  answer clears the request. */
-const takeAsked = (session) => askedToSee.delete(session);
+const takeAsked = async (session) => {
+  const asked = kept.asked.includes(session);
+  await mark('asked', session, false);
+  return asked;
+};
 
 /** Whether a window shows the call's conversation, so a tab can open
  *  beside it: a helper's conversation is open in no window, and its tab
@@ -1630,13 +1651,13 @@ const keyCombo = (combo) =>
  *  next command tells: one that opens no tab asks again, and fails when no
  *  tab is left for it, which clears the record. */
 const tabInSight = async (session) => {
-  if (!inSight.has(session)) return false;
+  if (!kept.shown.includes(session)) return false;
   try {
     await send(session, 'evaluate', { js: 'true' });
   } catch {
-    inSight.delete(session);
+    await mark('shown', session, false);
   }
-  return inSight.has(session);
+  return kept.shown.includes(session);
 };
 
 /** A search's answer: what it did, then the results as a numbered list
@@ -1684,21 +1705,22 @@ const searchInTab = async (session, query, show, why = '') => {
     : { text: `${lead} The page lists no results.\n\n${state}`, results };
 };
 
-/** The end of the last DuckDuckGo search, the searches waiting for their
- *  turn after it, and when DuckDuckGo last showed its bot check. */
+/** The end of the last DuckDuckGo search, and the searches waiting for
+ *  their turn after it. */
 let duckEnded = 0;
 let duckQueue = Promise.resolve();
-let duckChecked = -DUCKDUCKGO_REST_MS;
 
 /** The results of DuckDuckGo's page without scripts, fetched through the
  *  backend's own network with the request its search form sends, or null
  *  when the page shows DuckDuckGo's bot check instead. One search runs at
  *  a time, a gap after the one before; while DuckDuckGo still checks the
- *  address, no search goes out and each answers the check. */
+ *  address, no search goes out and each answers the check. A clock set
+ *  back lengthens neither the gap nor the rest. */
 const duckSearch = (query) => {
   const turn = duckQueue.then(async () => {
-    if (Date.now() < duckChecked + DUCKDUCKGO_REST_MS) return null;
-    await sleep(duckEnded + DUCKDUCKGO_GAP_MS - Date.now());
+    const sinceCheck = Date.now() - kept.checked;
+    if (sinceCheck >= 0 && sinceCheck < DUCKDUCKGO_REST_MS) return null;
+    await sleep(Math.min(DUCKDUCKGO_GAP_MS, duckEnded + DUCKDUCKGO_GAP_MS - Date.now()));
     try {
       const answer = await held.net.fetch({
         url: DUCKDUCKGO_FORM,
@@ -1714,7 +1736,7 @@ const duckSearch = (query) => {
       });
       const doc = parseHtml(textOf(bytesOf(answer.body), contentType(answer)));
       if (findElement(doc, (el) => hasClass(el, 'anomaly-modal__modal'))) {
-        duckChecked = Date.now();
+        await keep({ checked: Date.now() });
         return null;
       }
       if (answer.status !== 200) throw new Error(`DuckDuckGo answered ${answer.status}`);
@@ -1783,12 +1805,12 @@ const allowed = async () => {
 const tools = {
   async navigate({ url }, session) {
     let out = await guarded(session, 'navigate', { url: String(url) });
-    if (takeAsked(session) && !out.shown) out = await send(session, 'show', {});
+    if ((await takeAsked(session)) && !out.shown) out = await send(session, 'show', {});
     return after(session, out.shown ? 'Navigated.' : QUIET_NOTE('Navigated'), 0);
   },
   async search({ query }, session, context) {
     const words = String(query);
-    const asked = takeAsked(session);
+    const asked = await takeAsked(session);
     const { text, results } =
       asked || (await tabInSight(session))
         ? await searchInTab(session, words, asked)
@@ -1813,7 +1835,7 @@ const tools = {
     } catch {
       // The session has no tab and no Browser tab shows a page it could
       // take: the next page the session opens comes in front of the person.
-      askedToSee.add(session);
+      await mark('asked', session, true);
       return `No page is open yet. The next page you open with ${held.app.id}_navigate, or the next search with ${held.app.id}_search, opens in a tab in front of the person, and a search there runs on Google.`;
     }
     return `The tab is in front of the person now, and a search with ${held.app.id}_search runs on Google there.`;
@@ -1986,8 +2008,9 @@ const tools = {
 };
 
 module.exports = {
-  activate(ctx) {
+  async activate(ctx) {
     held = ctx;
+    kept = { ...kept, ...(await ctx.store.get(KEPT_KEY)) };
   },
   tools: Object.fromEntries(
     Object.entries(tools).map(([name, tool]) => [
