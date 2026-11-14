@@ -218,7 +218,7 @@
     {
       "name": "state",
       "title": "Look at the page",
-      "description": "The page as the agent acts on it: the URL and title, the scroll position, then the visible content in order. Each interactive element is one line like [12]<a href=/pricing>Pricing</a> or [13]<input type=email placeholder=Email />; click, input, scroll, dropdown_options and select_dropdown take that number. Plain lines are visible text. Only the visible part of the page is listed, with a count of the links and controls outside it; scroll or find_text to reach them. Indices change on every state, so act on the latest one. Every action returns a fresh state, so call this only when the page may have changed by itself.",
+      "description": "Return the page as the agent acts on it: the URL and title, the scroll position, then the visible content in order. Each interactive element is one line like [12]<a href=/pricing>Pricing</a> or [13]<input type=email placeholder=Email />; click, input, scroll, dropdown_options and select_dropdown take that number. Plain lines are visible text. Only the visible part of the page is listed, with a count of the links and controls outside it; scroll or find_text to reach them. Indices change on every state, so act on the latest one. Every action returns a fresh state, so call this only when the page may have changed by itself.",
       "input": {
         "type": "object",
         "properties": {}
@@ -454,7 +454,7 @@
     {
       "name": "extract",
       "title": "Read the whole page",
-      "description": "The page's main content as Markdown, with headings, links, lists and tables kept. Long pages come in chunks; the result says where to continue with start.",
+      "description": "Return the page's main content as Markdown, with headings, links, lists and tables kept. Long pages come in chunks; the result says where to continue with start.",
       "input": {
         "type": "object",
         "properties": {
