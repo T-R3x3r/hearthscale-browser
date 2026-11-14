@@ -8,7 +8,7 @@
     "light": "assets/icon-light.svg",
     "dark": "assets/icon-dark.svg"
   },
-  "description": "A web browser in Hearthscale's tabs, which an app's agent also drives with tools: it sees the page as numbered interactive elements, acts on them by number in front of you, signed in as you, and hands the tab over at a sign-in page or a bot check. An agent can also search and read pages quickly without opening them.",
+  "description": "Browse the web in Hearthscale's tabs. Ask an agent to search, read pages or fill in a form, and see the page beside the conversation.",
   "environment": {
     "kind": "process",
     "network": [
@@ -48,8 +48,8 @@
   "tools": [
     {
       "name": "navigate",
-      "title": "Go to a page",
-      "description": "Navigate the session's browser tab to a URL, wait for the page to settle, and return the page state. When the session has no tab, it opens one hidden in the background, which the person sees only after the show tool; a tab the person already sees comes to the front.",
+      "title": "Open a page",
+      "description": "Open a URL in the session's browser tab, wait for the page to settle, and return the page state. With no tab yet, the page opens in a hidden tab, which the person sees after the show tool, or at once when show found no page open earlier in this turn. A tab the person already sees stays in front.",
       "input": {
         "type": "object",
         "properties": {
@@ -70,7 +70,7 @@
     {
       "name": "search",
       "title": "Search the web",
-      "description": "Search the web and answer the results as a numbered list, each with its title, address and snippet. Prefer this over guessing a URL. In a browser tab the person sees, the search runs there on Google. Otherwise it runs on DuckDuckGo with no tab, and the person sees only your answer; navigate opens a result in a tab.",
+      "description": "Search the web and answer the results as a numbered list, each with its title, address and snippet. Prefer this over guessing a URL. In a browser tab the person sees, the search runs there on Google. Otherwise it runs on DuckDuckGo with no tab, and the person sees only your answer; when DuckDuckGo shows a bot check instead, the search runs on Google in a tab the person then sees. navigate opens a result in a tab.",
       "input": {
         "type": "object",
         "properties": {
@@ -192,7 +192,7 @@
     {
       "name": "show",
       "title": "Show the page",
-      "description": "Bring the session's browser tab in front of the person, in a tab beside the conversation. Call it only when the person asked to see the page in words like open it up, show it, pull up, or let me see. Never call it for a question the answer alone satisfies.",
+      "description": "Bring the session's browser tab in front of the person, in a tab beside the conversation. Call it only when the person asks to see the page or the browser, in words like open it up, show it, pull up, or let me see; a search after it runs on Google in that tab. When no page is open yet, the next page you open or search you run shows there. Never call it for a question the answer alone satisfies.",
       "input": {
         "type": "object",
         "properties": {}
@@ -251,7 +251,7 @@
     },
     {
       "name": "input",
-      "title": "Type on the page",
+      "title": "Type into a field",
       "description": "Type text into the input, textarea or editable element with the given state index and return the page state. The field is cleared first unless clear is false. Press Enter afterwards with send_keys when the form has no button.",
       "input": {
         "type": "object",
@@ -513,7 +513,7 @@
     },
     {
       "name": "screenshot",
-      "title": "Take a picture of the page",
+      "title": "Take a screenshot of the page",
       "description": "Capture the session's browser tab as an image, with every element of the last state boxed and labelled by its index.",
       "input": {
         "type": "object",
@@ -526,8 +526,8 @@
     },
     {
       "name": "close",
-      "title": "Close the page",
-      "description": "Close the session's agent-driven browser tab.",
+      "title": "Close the tab",
+      "description": "Close the session's browser tab.",
       "input": {
         "type": "object",
         "properties": {}

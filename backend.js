@@ -10,9 +10,13 @@
  * "page scripts" run inside the page, reaching only `window`, `document`
  * and their arguments. Clicks, typing and keys reach the page as the
  * person's own input. A search runs on Google in the session's tab while
- * the person sees that tab, and otherwise on DuckDuckGo with no tab; both
- * answer the results as a list. The read_pages tool and a search with no
- * tab fetch through the backend's own network, so they need no window;
+ * the person sees that tab, and otherwise on DuckDuckGo with no tab, one
+ * search at a time; a search DuckDuckGo answers with its bot check runs
+ * on Google in a tab the person sees. Both answer the results as a list.
+ * When the person asks to see the browser before any page is open, the
+ * next page the turn opens comes in front of them. The read_pages tool and
+ * a search with no tab fetch through the backend's own network, so they
+ * need no window;
  * read_pages turns pages into Markdown with the converter the extract
  * tool runs in the page. A bot check is never defeated and a password is
  * never typed: a challenge page or a sign-in page raises the handoff, the
@@ -55,10 +59,14 @@ const QUIET_NOTE = (did) =>
   `${did}. The page loaded in the background and the person cannot see it; call ${held.app.id}_show when they ask to see it.`;
 
 /** A search the person sees runs on Google in their tab, where they can
- *  pass its bot check; a search only the chat shows reads DuckDuckGo's
- *  results page for browsers without scripts. */
+ *  pass its bot check; a search only the chat shows sends the search form
+ *  of DuckDuckGo's results page for browsers without scripts. */
 const GOOGLE_SEARCH = (q) => `https://www.google.com/search?q=${encodeURIComponent(q)}&udm=14`;
-const DUCKDUCKGO_SEARCH = (q) => `https://html.duckduckgo.com/html/?q=${encodeURIComponent(q)}`;
+const DUCKDUCKGO_FORM = 'https://html.duckduckgo.com/html/';
+/** DuckDuckGo answers a quick run of searches from one address with its
+ *  bot check, for several minutes, so its searches go out one at a time,
+ *  each this long after the last one ended. */
+const DUCKDUCKGO_GAP_MS = 2000;
 
 // ---- Page scripts ---------------------------------------------------------
 
@@ -1445,6 +1453,25 @@ const send = async (session, op, args) => {
   return out;
 };
 
+/** The sessions whose person asked to see the browser while no page was
+ *  open, by the turn they asked in: the next page that turn opens comes
+ *  in front of them. */
+const askedToSee = new Map();
+
+/** Whether the person asked, in the call's turn, to see a page that was
+ *  not open yet; answering it clears the request. */
+const takeAsked = ({ session, turn }) => {
+  const asked = turn !== undefined && askedToSee.get(session) === turn;
+  askedToSee.delete(session);
+  return asked;
+};
+
+/** Whether a window shows the call's conversation, so a tab can open
+ *  beside it: a helper's conversation is open in no window, and its tab
+ *  commands would wait for one. */
+const inConversation = ({ session, authoritySession }) =>
+  session !== undefined && (authoritySession === undefined || authoritySession === session);
+
 /** The page a handoff was last raised for: the person answered it once,
  *  and the page does not ask again until the tab has left it. */
 let handedOver = null;
@@ -1619,11 +1646,13 @@ const searchText = (lead, results) =>
   ].join('\n\n');
 
 /** A search in the session's tab, which the person sees: Google's page
- *  there, whose bot check goes to the person. */
-const searchInTab = async (session, query) => {
-  const out = await guarded(session, 'navigate', { url: GOOGLE_SEARCH(query) });
-  const did = `Searched Google for "${query}"`;
-  const lead = out.shown ? `${did}.` : QUIET_NOTE(did);
+ *  there, whose bot check goes to the person. With `show`, the tab comes
+ *  in front of the person first; `why` says what led the search there. */
+const searchInTab = async (session, query, show, why = '') => {
+  let out = await guarded(session, 'navigate', { url: GOOGLE_SEARCH(query) });
+  if (show && !out.shown) out = await send(session, 'show', {});
+  const did = `${why}Searched Google for "${query}"`;
+  const lead = out.shown ? `${did} in the browser tab the person sees.` : QUIET_NOTE(did);
   const listed = async () =>
     (
       await runScript(
@@ -1650,22 +1679,63 @@ const searchInTab = async (session, query) => {
     : { text: `${lead} The page lists no results.\n\n${state}`, results };
 };
 
-/** A search only the chat shows: DuckDuckGo's page without scripts,
- *  fetched through the backend's own network, with no tab. */
-const searchWithoutTab = async (query) => {
-  const answer = await held.net.fetch({
-    url: DUCKDUCKGO_SEARCH(query),
-    headers: READ_HEADERS,
-    timeoutMs: READ_TIMEOUT_MS,
+/** The end of the last DuckDuckGo search, and the searches waiting for
+ *  their turn after it. */
+let duckEnded = 0;
+let duckQueue = Promise.resolve();
+
+/** The results of DuckDuckGo's page without scripts, fetched through the
+ *  backend's own network with the request its search form sends, or null
+ *  when the page shows DuckDuckGo's bot check instead. One search runs at
+ *  a time, a gap after the one before. */
+const duckSearch = (query) => {
+  const turn = duckQueue.then(async () => {
+    await sleep(duckEnded + DUCKDUCKGO_GAP_MS - Date.now());
+    try {
+      const answer = await held.net.fetch({
+        url: DUCKDUCKGO_FORM,
+        method: 'POST',
+        headers: {
+          ...READ_HEADERS,
+          'content-type': 'application/x-www-form-urlencoded',
+          origin: new URL(DUCKDUCKGO_FORM).origin,
+          referer: DUCKDUCKGO_FORM,
+        },
+        body: btoa(new URLSearchParams({ q: query, b: '' }).toString()),
+        timeoutMs: READ_TIMEOUT_MS,
+      });
+      const doc = parseHtml(textOf(bytesOf(answer.body), contentType(answer)));
+      if (findElement(doc, (el) => hasClass(el, 'anomaly-modal__modal'))) return null;
+      if (answer.status !== 200) throw new Error(`DuckDuckGo answered ${answer.status}`);
+      return duckResults(doc);
+    } finally {
+      duckEnded = Date.now();
+    }
   });
-  const doc = parseHtml(textOf(bytesOf(answer.body), contentType(answer)));
-  if (findElement(doc, (el) => hasClass(el, 'anomaly-modal__modal'))) {
+  duckQueue = turn.catch(() => {});
+  return turn;
+};
+
+/** A search only the chat shows: DuckDuckGo with no tab. When DuckDuckGo
+ *  shows its bot check, the search runs on Google in a tab beside the
+ *  conversation, where the person sees the page and passes any check of
+ *  Google's; a helper, which no window shows, answers that DuckDuckGo
+ *  refused. */
+const searchWithoutTab = async (context, query) => {
+  const results = await duckSearch(query);
+  if (results === null) {
+    if (inConversation(context)) {
+      return searchInTab(
+        context.session,
+        query,
+        true,
+        'DuckDuckGo showed a bot check, so the search ran in a browser tab instead. ',
+      );
+    }
     throw new Error(
       `DuckDuckGo shows a bot check instead of results. Search again in a few minutes, or read pages you know with ${held.app.id}_read_pages.`,
     );
   }
-  if (answer.status !== 200) throw new Error(`DuckDuckGo answered ${answer.status}`);
-  const results = duckResults(doc);
   const lead = `Searched DuckDuckGo for "${query}".`;
   return {
     text: results.length ? searchText(lead, results) : `${lead} It lists no results.`,
@@ -1697,17 +1767,21 @@ const allowed = async () => {
   return !(settings && typeof settings === 'object' && settings.agent === false);
 };
 
-/** Each tool's body, called with its input and the session of its call. */
+/** Each tool's body, called with its input, the session of its call and
+ *  the call's context. */
 const tools = {
-  async navigate({ url }, session) {
-    const out = await guarded(session, 'navigate', { url: String(url) });
+  async navigate({ url }, session, context) {
+    let out = await guarded(session, 'navigate', { url: String(url) });
+    if (takeAsked(context) && !out.shown) out = await send(session, 'show', {});
     return after(session, out.shown ? 'Navigated.' : QUIET_NOTE('Navigated'), 0);
   },
-  async search({ query }, session) {
+  async search({ query }, session, context) {
     const words = String(query);
-    const { text, results } = (await tabInSight(session))
-      ? await searchInTab(session, words)
-      : await searchWithoutTab(words);
+    const asked = takeAsked(context);
+    const { text, results } =
+      asked || (await tabInSight(session))
+        ? await searchInTab(session, words, asked)
+        : await searchWithoutTab(context, words);
     return { content: [{ kind: 'text', text }], structured: { query: words, results } };
   },
   async read_pages({ urls, start }) {
@@ -1722,9 +1796,16 @@ const tools = {
     const text = pages.map((page, i) => pageLines(page, i, pages.length)).join('\n\n');
     return { content: [{ kind: 'text', text }], structured: { pages } };
   },
-  async show(_, session) {
-    await send(session, 'show', {});
-    return 'The tab is in front of the person now.';
+  async show(_, session, context) {
+    try {
+      await send(session, 'show', {});
+    } catch {
+      // The session has no tab and no Browser tab shows a page it could
+      // take: the next page this turn opens comes in front of the person.
+      if (context.turn !== undefined) askedToSee.set(session, context.turn);
+      return `No page is open yet. The next page you open with ${held.app.id}_navigate, or the next search with ${held.app.id}_search, opens in a tab in front of the person, and a search there runs on Google.`;
+    }
+    return `The tab is in front of the person now, and a search with ${held.app.id}_search runs on Google there.`;
   },
   async go_back(_, session) {
     await send(session, 'evaluate', { js: '(history.back(), true)' });
@@ -1902,7 +1983,7 @@ module.exports = {
       name,
       async (input, run) => {
         if (!(await allowed())) throw new Error(OFF);
-        return tool(input, run.context.session);
+        return tool(input, run.context.session, run.context);
       },
     ]),
   ),

@@ -23,11 +23,20 @@ its name; it installs from the Marketplace like any other app.
 - `search` answers the results as a list, and as a structured result for
   programs. It runs on Google in the session's tab while the person sees
   that tab, as the last tab command's `shown` said and a command that opens
-  no tab confirms, since the person may have closed it; otherwise it reads
-  DuckDuckGo's page without scripts (`html.duckduckgo.com`) through
-  `net.fetch`, with no tab and no window. DuckDuckGo answers that page
-  with its own bot check (status 202, `anomaly-modal`) for several minutes
-  after a few searches in quick succession.
+  no tab confirms, since the person may have closed it; otherwise it sends
+  the search form of DuckDuckGo's page without scripts
+  (`html.duckduckgo.com`) through `net.fetch`, with no tab and no window.
+  DuckDuckGo answers every search from the address with its own bot check
+  (status 202, `anomaly-modal`) for several minutes after a few searches
+  in quick succession, so these searches go out one at a time, two
+  seconds apart, across every conversation. A search that still gets the
+  check runs on Google in the session's tab, shown beside the
+  conversation. A helper's conversation is open in no window, where a tab
+  command would wait for one, so a helper's search answers the check as
+  an error.
+- `show` with nothing to show, no tab of the session and no Browser tab
+  that shows a page, keeps the turn: the next `navigate` or `search` of
+  that turn opens its tab in front of the person.
 - `read_pages` needs no tab and no window: it fetches pages through the
   backend's own network (`net.fetch`) and turns them into Markdown with the
   converter `extract` runs inside the page, `toMarkdown`. With no styles to
